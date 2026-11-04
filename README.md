@@ -89,17 +89,19 @@ UCSC is queried at most once per second (`--ucsc-delay`).
 `--assembly GRCh37` uses the GRCh37 Ensembl server and hg19 annotations (no MANE there,
 canonical is used).
 
-Genome-wide in-silico PCR locally (Linux; macOS binaries are under `macOSX.x86_64`):
+Genome-wide in-silico PCR locally. isPcr lives in the `blat/` subdirectory of the UCSC
+binaries; replace `linux.x86_64` with `macOSX.arm64` (Apple Silicon) or `macOSX.x86_64` (Intel):
 
 ```bash
 mkdir -p tools
-curl -o tools/isPcr https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/isPcr && chmod +x tools/isPcr
+curl -o tools/isPcr https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/blat/isPcr && chmod +x tools/isPcr
 curl -o tools/hg38.2bit https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit   # ~800 MB
 python exonprimer_batch.py genes.txt --ispcr tools/isPcr --genome-2bit tools/hg38.2bit
 ```
 
 isPcr indexes the whole genome in memory (several GB of RAM). If it fails, the run continues
-and the output says "in-silico PCR not run".
+and the output says "in-silico PCR not run". On macOS the downloaded binary is unsigned, so
+Gatekeeper may need `xattr -d com.apple.quarantine tools/isPcr`.
 
 ## Publish the website on GitHub
 

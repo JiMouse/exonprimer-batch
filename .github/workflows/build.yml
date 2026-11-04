@@ -63,14 +63,20 @@ jobs:
           path: tools
           key: ispcr-${{ env.UCSC_DB }}-v1
 
+      # A UCSC outage must not block the site: the design step falls back to
+      # running without isPcr, and the output says "in-silico PCR not run".
+      # Downloads are staged so a partial set is never cached.
       - name: Download isPcr and genome
         if: env.RUN_ISPCR == 'true' && steps.genome.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: |
-          mkdir -p tools
-          curl -fsSL -o tools/isPcr https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/isPcr
-          chmod +x tools/isPcr
-          curl -fsSL -o tools/${UCSC_DB}.2bit \
+          tmp=$(mktemp -d)
+          curl -fsSL -o "$tmp/isPcr" https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/blat/isPcr
+          chmod +x "$tmp/isPcr"
+          curl -fsSL -o "$tmp/${UCSC_DB}.2bit" \
             https://hgdownload.soe.ucsc.edu/goldenPath/${UCSC_DB}/bigZips/${UCSC_DB}.2bit
+          mkdir -p tools
+          mv "$tmp/isPcr" "$tmp/${UCSC_DB}.2bit" tools/
 
       - name: Restore web cache (Ensembl / UCSC responses)
         uses: actions/cache@v4
