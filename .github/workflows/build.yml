@@ -2,10 +2,14 @@ name: Build primers and deploy site
 
 # Runs when genes.txt / the script / the site change, or by hand
 # (Actions tab -> "Build primers and deploy site" -> Run workflow).
+#
+# The gene list is far too large for a single job, so the work is sharded:
+# "plan" splits genes.txt into chunks, "design" runs one chunk per job, and
+# "merge" stitches the chunks into one site/ and one workbook before deploying.
 on:
   push:
     branches: [main]
-    paths: [genes.txt, exonprimer_batch.py, site/**, .github/workflows/build.yml]
+    paths: [genes.txt, exonprimer_batch.py, scripts/**, site/**, .github/workflows/build.yml]
   workflow_dispatch:
     inputs:
       assembly:
@@ -17,6 +21,12 @@ on:
         description: Genome-wide in-silico PCR check (downloads the genome, ~10 min first time)
         type: boolean
         default: true
+      chunk_size:
+        description: Genes per job (smaller = more jobs, each finishing sooner)
+        default: "150"
+      max_parallel:
+        description: Concurrent jobs. Keep low - every job queries Ensembl and UCSC.
+        default: "4"
       extra_args:
         description: "Extra options, e.g. --min-dist 40 --snp-maf 0.05 --strict"
         required: false
@@ -34,10 +44,15 @@ concurrency:
 env:
   ASSEMBLY: ${{ inputs.assembly || 'GRCh38' }}
   RUN_ISPCR: ${{ github.event_name == 'push' || inputs.ispcr }}
+  CHUNK_SIZE: ${{ inputs.chunk_size || '150' }}
 
 jobs:
-  build:
+  # ---- 1. split the gene list and publish the chunk list as a matrix ----
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.split.outputs.chunks }}
+      count: ${{ steps.split.outputs.count }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +65,47 @@ jobs:
 
       - name: Offline tests
         run: python tests/test_offline.py
+
+      - name: Split gene list
+        id: split
+        run: |
+          mkdir -p chunks
+          # Normalise first: drop comments and blanks so chunks are even.
+          grep -v '^\s*#' genes.txt | grep -v '^\s*$' > all_genes.txt
+          split -l "$CHUNK_SIZE" -d -a 3 all_genes.txt chunks/chunk_
+          ls chunks | sed 's/chunk_//' | jq -R . | jq -sc . > ids.json
+          echo "chunks=$(cat ids.json)" >> "$GITHUB_OUTPUT"
+          echo "count=$(ls chunks | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "$(wc -l < all_genes.txt) genes in $(ls chunks | wc -l) chunks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunks
+          path: chunks
+
+  # ---- 2. design one chunk per job ----
+  design:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false            # one bad chunk must not discard the rest
+      max-parallel: ${{ fromJSON(inputs.max_parallel || '4') }}
+      matrix:
+        chunk: ${{ fromJSON(needs.plan.outputs.chunks) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chunks
+          path: chunks
 
       - name: Genome db name
         run: echo "UCSC_DB=$([ "$ASSEMBLY" = GRCh37 ] && echo hg19 || echo hg38)" >> "$GITHUB_ENV"
@@ -78,12 +134,16 @@ jobs:
           mkdir -p tools
           mv "$tmp/isPcr" "$tmp/${UCSC_DB}.2bit" tools/
 
+      # Each chunk keeps its own web cache, restored from any earlier run of
+      # the same chunk so only genuinely new genes hit Ensembl and UCSC.
       - name: Restore web cache (Ensembl / UCSC responses)
         uses: actions/cache@v4
         with:
           path: .cache
-          key: web-${{ env.ASSEMBLY }}-${{ hashFiles('genes.txt') }}
-          restore-keys: web-${{ env.ASSEMBLY }}-
+          key: web-${{ env.ASSEMBLY }}-${{ matrix.chunk }}-${{ hashFiles(format('chunks/chunk_{0}', matrix.chunk)) }}
+          restore-keys: |
+            web-${{ env.ASSEMBLY }}-${{ matrix.chunk }}-
+            web-${{ env.ASSEMBLY }}-
 
       - name: Design primers
         run: |
@@ -91,8 +151,47 @@ jobs:
           if [ "$RUN_ISPCR" = "true" ] && [ -x tools/isPcr ]; then
             ISPCR_ARGS="--ispcr tools/isPcr --genome-2bit tools/${UCSC_DB}.2bit"
           fi
-          python exonprimer_batch.py genes.txt --assembly "$ASSEMBLY" \
-            -o site/exon_primers.xlsx --json-dir site/data $ISPCR_ARGS ${{ inputs.extra_args }}
+          mkdir -p "parts/${{ matrix.chunk }}"
+          python exonprimer_batch.py "chunks/chunk_${{ matrix.chunk }}" \
+            --assembly "$ASSEMBLY" \
+            -o "parts/${{ matrix.chunk }}/part.xlsx" \
+            --json-dir "parts/${{ matrix.chunk }}/data" \
+            $ISPCR_ARGS ${{ inputs.extra_args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.chunk }}
+          path: parts/${{ matrix.chunk }}
+          retention-days: 7
+
+  # ---- 3. merge every chunk into one site and one workbook ----
+  merge:
+    needs: [plan, design]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+
+      - name: Merge chunks
+        run: |
+          have=$(ls parts | wc -l | tr -d ' ')
+          echo "merging $have of ${{ needs.plan.outputs.count }} chunks"
+          if [ "$have" -lt "${{ needs.plan.outputs.count }}" ]; then
+            echo "::warning::only $have of ${{ needs.plan.outputs.count }} chunks produced output; the site will be incomplete"
+          fi
+          python scripts/merge_parts.py parts site
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -104,7 +203,7 @@ jobs:
           path: site/exon_primers.xlsx
 
   deploy:
-    needs: build
+    needs: merge
     runs-on: ubuntu-latest
     environment:
       name: github-pages

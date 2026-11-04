@@ -116,6 +116,32 @@ Gatekeeper may need `xattr -d com.apple.quarantine tools/isPcr`.
 The workflow runs the offline tests, designs primers, and deploys `site/` — nothing generated is
 committed to the repository.
 
+### Large gene lists
+
+A few thousand genes do not fit in one GitHub job (6 h limit), so the build is **sharded**:
+
+| Job | What it does |
+|---|---|
+| `plan` | runs the offline tests, strips comments from `genes.txt` and `split`s it into chunks |
+| `design` | a matrix job per chunk, each designing its own genes and uploading `part.xlsx` + `data/` |
+| `merge` | `scripts/merge_parts.py` stitches the chunks into one `site/` and one workbook |
+| `deploy` | publishes the merged `site/` to Pages |
+
+Tune it from the **Actions** tab: `chunk_size` (genes per job, default 150) and `max_parallel`
+(concurrent jobs, default 4). **Keep `max_parallel` low** — every job queries Ensembl and UCSC,
+and parallel jobs multiply that load on public servers.
+
+Each chunk caches its own Ensembl/UCSC responses, so a re-run only pays for genes that are
+genuinely new. `fail-fast` is off and `merge` runs even if some chunks fail: the site is built
+from whatever succeeded, and the run log warns how many chunks are missing. Re-running the
+workflow fills the gaps from cache.
+
+The merged workbook is written with openpyxl's write-only writer, so memory stays flat
+regardless of how many amplicons there are.
+
+Expect retired gene symbols to fail: Ensembl does not follow HGNC aliases, so `GBA` or `AARS`
+resolve to nothing and land in the Problems sheet. Use current symbols.
+
 ## Tests
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
