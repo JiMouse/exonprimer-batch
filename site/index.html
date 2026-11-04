@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exon Primers</title>
+<meta name="description" content="Precomputed ExonPrimer-style intronic PCR primers for coding exons">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f6f7f5; --panel:#ffffff; --ink:#1b2422; --muted:#5f6d69; --line:#dde3e0;
+  --accent:#1f6f66; --accent-soft:#e2f0ed; --exon:#1f6f66; --utr:#b9c4c0;
+  --fwd:#c9eccf; --fwd-ink:#17602a; --rev:#e7dcf6; --rev-ink:#5a2d91;
+  --warn:#9a5b00; --warn-soft:#fdf1dc; --ok:#1d7a3a; --ok-soft:#dcf1e1; --bad:#b3261e; --bad-soft:#f9dedc;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121716; --panel:#1a211f; --ink:#e3ebe8; --muted:#94a39e; --line:#2b3532;
+    --accent:#5cc4b5; --accent-soft:#1d3532; --exon:#4fb3a5; --utr:#3d4a46;
+    --fwd:#1f4528; --fwd-ink:#9fe2ad; --rev:#3a2d52; --rev-ink:#d2b9f5;
+    --warn:#f0b45a; --warn-soft:#3a2c14; --ok:#7fd99a; --ok-soft:#1c3424; --bad:#f2948c; --bad-soft:#3d1d1b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121716; --panel:#1a211f; --ink:#e3ebe8; --muted:#94a39e; --line:#2b3532;
+  --accent:#5cc4b5; --accent-soft:#1d3532; --exon:#4fb3a5; --utr:#3d4a46;
+  --fwd:#1f4528; --fwd-ink:#9fe2ad; --rev:#3a2d52; --rev-ink:#d2b9f5;
+  --warn:#f0b45a; --warn-soft:#3a2c14; --ok:#7fd99a; --ok-soft:#1c3424; --bad:#f2948c; --bad-soft:#3d1d1b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 16px 64px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 24px;margin-bottom:22px}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:-.01em}
+h1 span{color:var(--accent)}
+.meta{color:var(--muted);font-size:13px}
+.meta a{color:var(--accent)}
+.search{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+.search input{flex:1 1 260px;min-width:0;font:inherit;font-size:17px;padding:11px 14px;border:1px solid var(--line);
+  border-radius:8px;background:var(--panel);color:var(--ink);text-transform:uppercase}
+.search input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.btn{font:inherit;font-size:13px;padding:8px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel);
+  color:var(--ink);cursor:pointer;text-decoration:none;white-space:nowrap}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
+.gene-head{display:flex;flex-wrap:wrap;gap:4px 22px;align-items:baseline}
+.gene-head h2{margin:0;font-size:26px;font-weight:600;font-style:italic}
+.kv{color:var(--muted);font-size:13px}
+.kv b{color:var(--ink);font-weight:500;font-family:"IBM Plex Mono",monospace;font-size:12.5px}
+.exmap{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+.ex{min-width:40px;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--muted);
+  font:500 13px "IBM Plex Mono",monospace;cursor:default;text-align:center}
+.ex.coding{border-color:var(--exon);color:var(--exon);cursor:pointer}
+.ex.coding:hover{background:var(--accent-soft)}
+.ex.sel{background:var(--exon);color:var(--panel)}
+.ex.check{border-color:var(--warn);color:var(--warn)}
+.ex.check.sel{background:var(--warn);color:var(--panel)}
+.ex.fail{border-style:dashed;border-color:var(--bad);color:var(--bad)}
+.ex.fail.sel{background:var(--bad);color:var(--panel)}
+.pill{display:inline-block;font:600 11.5px "IBM Plex Sans",sans-serif;padding:2px 8px;border-radius:10px;margin-left:8px;vertical-align:2px}
+.pill.ok{background:var(--ok-soft);color:var(--ok)} .pill.check{background:var(--warn-soft);color:var(--warn)} .pill.fail{background:var(--bad-soft);color:var(--bad)}
+.warns{margin:0 0 14px;padding:10px 14px 10px 30px;background:var(--warn-soft);border-radius:8px;font-size:13px;color:var(--ink)}
+.warns li{margin:2px 0}
+.snps{display:block;font:400 11.5px "IBM Plex Sans",sans-serif;color:var(--warn);letter-spacing:0;margin-top:2px}
+.snps a{color:inherit}
+pre.amplicon .snp{outline:1.5px solid var(--warn);outline-offset:-1px;border-radius:2px}
+.legend{margin-top:10px;font-size:12px;color:var(--muted)}
+.amp h3{margin:0 0 4px;font-size:17px;font-weight:600}
+.amp .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+.badge{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:10px;background:var(--warn-soft);color:var(--warn);margin-left:6px;font-weight:500}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+td.seq{font:600 14px "IBM Plex Mono",monospace;letter-spacing:.02em;word-break:break-all}
+.tag{display:inline-block;font:600 12px "IBM Plex Mono",monospace;padding:2px 7px;border-radius:5px}
+.tag.f{background:var(--fwd);color:var(--fwd-ink)} .tag.r{background:var(--rev);color:var(--rev-ink)}
+.copy{font-size:12px;padding:4px 9px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 18px;margin:16px 0 4px}
+.facts div{font-size:12px;color:var(--muted)}
+.facts b{display:block;font:500 15px "IBM Plex Mono",monospace;color:var(--ink)}
+details{margin-top:14px}
+summary{cursor:pointer;color:var(--accent);font-size:13.5px}
+pre.amplicon{font:13px/1.7 "IBM Plex Mono",monospace;background:var(--bg);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:10px 0 0;white-space:pre}
+pre.amplicon .n{color:var(--muted);user-select:none}
+pre.amplicon .e{color:var(--exon);font-weight:600}
+pre.amplicon .pf{background:var(--fwd);color:var(--fwd-ink)}
+pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
+.alt td{font-size:13px}
+.empty{color:var(--muted);text-align:center;padding:40px 10px}
+.note{font-size:12.5px;color:var(--muted);margin-top:28px;line-height:1.6}
+.table-scroll{overflow-x:auto}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:7px 14px;border-radius:7px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+@media (max-width:600px){ td.seq{font-size:12.5px} .gene-head h2{font-size:22px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Exon<span>Primers</span></h1>
+    <div class="meta" id="meta">Loading…</div>
+  </header>
+
+  <div class="search">
+    <input id="q" list="genelist" placeholder="Gene symbol, e.g. MTHFR" autocomplete="off" spellcheck="false" aria-label="Gene symbol">
+    <datalist id="genelist"></datalist>
+    <a class="btn" href="exon_primers.xlsx" download>Download all (Excel)</a>
+  </div>
+
+  <div id="view"><div class="panel empty">Choose a gene to see its coding exons and primers.</div></div>
+
+  <p class="note" id="note"></p>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let META = null, GENE = null;
+const cache = {};
+
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),1400); }
+function copy(text, what){ navigator.clipboard.writeText(text).then(()=>toast(`${what} copied`)).catch(()=>toast('Copy failed')); }
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmt(n){ return Number(n).toLocaleString('en-US'); }
+
+async function init(){
+  try{
+    META = await (await fetch('data/index.json')).json();
+  }catch(e){
+    $('#meta').textContent = 'No data yet — run the build workflow.'; return;
+  }
+  $('#meta').innerHTML = `${META.genes.length} genes · ${esc(META.assembly)} · built ${esc(META.generated)}`;
+  $('#genelist').innerHTML = META.genes.map(g=>`<option value="${esc(g.gene)}">${esc(g.transcript)}${g.refseq?' · '+esc(g.refseq):''}</option>`).join('');
+  const p = META.params;
+  $('#note').innerHTML = `Primers designed with Primer3 following the ExonPrimer approach: primer 3′ ends ≥ ${p.min_dist} bp from the exon/intron boundary, within a ${p.primer_region}-bp window; PCR products ${p.product_min}–${p.product_max} bp; exons too long for one product (targets over ${p.max_target} bp) get several overlapping primer pairs (${p.overlap}-bp overlap)${p.combine?'; exons with short introns combined':''}. Tm ${p.tm_min}–${p.tm_max} °C (opt ${p.tm_opt}), length ${p.size_min}–${p.size_max} nt. Target = ${p.target==='coding'?'coding part of each exon':'whole exon'}. Transcript: MANE Select (else Ensembl canonical).<br>
+  <b>Safeguards.</b> Common SNPs (dbSNP 155, MAF ≥ ${p.snp_maf}) and repeats (RepeatMasker) are masked before design. Tiers: <i>clean</i> = no SNP and no repeat under primers; <i>repeat-5p</i> = repeat only in the 5′ part of a primer; <i>snp-5p</i> = SNP present but never in the last ${p.snp_3prime} bases. Targets in segmental duplications are flagged. ${META.ispcr ? 'Every candidate pair was checked genome-wide by in-silico PCR (isPcr); specific pairs are preferred.' : 'Genome-wide in-silico PCR was <b>not</b> run for this build — use the UCSC link.'}
+  <b>OK</b> = clean tier, normal settings, no homology alert, no off-target product; <b>Check</b> = see the listed warnings.`
+    + (META.errors && META.errors.length ? `<br>Genes not processed: ${META.errors.map(e=>esc(e.gene)).join(', ')}.` : '');
+  route();
+}
+
+async function loadGene(sym){
+  const hit = META.genes.find(g=>g.gene.toUpperCase()===sym.toUpperCase());
+  if(!hit) return null;
+  if(!cache[hit.gene]) cache[hit.gene] = await (await fetch(`data/genes/${encodeURIComponent(hit.gene)}.json`)).json();
+  return cache[hit.gene];
+}
+
+async function route(){
+  const [g, ex] = decodeURIComponent(location.hash.slice(1)).split('/');
+  if(!g){ return; }
+  const gene = await loadGene(g);
+  if(!gene){ $('#view').innerHTML = `<div class="panel empty">“${esc(g)}” is not in the precomputed list.</div>`; return; }
+  GENE = gene; $('#q').value = gene.gene;
+  renderGene(gene, ex ? parseInt(ex,10) : null);
+}
+
+function exonStatus(gene, n){
+  const amps = ampsFor(gene,n), fails = failsFor(gene,n);
+  if(fails.length && !amps.length) return 'fail';
+  if(fails.length || amps.some(a=>a.status!=='OK')) return 'check';
+  return 'ok';
+}
+function ampsFor(gene, n){ return gene.amplicons.filter(a=>a.exons.includes(n)); }
+function failsFor(gene, n){ return gene.failures.filter(a=>a.exons.includes(n)); }
+
+function renderGene(gene, exNum){
+  const coding = gene.exons.filter(e=>e.coding);
+  if(exNum==null && coding.length) exNum = coding[0].n;
+  const chips = gene.exons.map(e=>{
+    if(!e.coding) return `<span class="ex" title="Exon ${e.n}: non-coding">${e.n}</span>`;
+    const st = exonStatus(gene, e.n);
+    return `<button class="ex coding ${st}${e.n===exNum?' sel':''}" data-n="${e.n}" title="Exon ${e.n}: ${e.len} bp — ${st==='ok'?'OK':st==='check'?'check warnings':'no primers'}">${e.n}</button>`;
+  }).join('');
+  const head = `<div class="panel">
+    <div class="gene-head">
+      <h2>${esc(gene.gene)}</h2>
+      <span class="kv">Transcript <b>${esc(gene.transcript)}</b></span>
+      ${gene.refseq?`<span class="kv">RefSeq <b>${esc(gene.refseq)}</b></span>`:''}
+      <span class="kv">chr<b>${esc(gene.chrom)}</b> (${gene.strand===1?'+':'−'})</span>
+      <span class="kv">${esc(gene.selection)}</span>
+    </div>
+    <div class="exmap">${chips}</div>
+    <div class="legend">Coding exons: <span class="pill ok">OK</span><span class="pill check">Check</span><span class="pill fail">No primers</span> · grey = non-coding.
+      <button class="btn copy" id="copyGene" style="margin-left:8px">Copy all ${esc(gene.gene)} primers (TSV)</button></div>
+  </div>`;
+  const amps = exNum!=null ? ampsFor(gene, exNum) : [];
+  const fails = exNum!=null ? failsFor(gene, exNum) : [];
+  const body = amps.map(a=>renderAmp(gene,a)).join('') +
+    fails.map(f=>`<div class="panel"><div class="amp"><h3>${esc(gene.gene)}_E${esc(f.label)} <span class="pill fail">No primers</span></h3>
+      <div class="sub">Primer3 found no pair with these settings. ${esc(f.reason||'')}</div></div></div>`).join('');
+  $('#view').innerHTML = head + (body || '<div class="panel empty">Select a coding exon.</div>');
+  document.querySelectorAll('.ex.coding').forEach(b=>b.onclick=()=>{ location.hash = `${gene.gene}/${b.dataset.n}`; });
+  $('#copyGene').onclick = ()=>copy(geneTSV(gene), `${gene.gene} primers`);
+  document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy(b.dataset.copy, b.dataset.what));
+}
+
+function ucscUrl(f,r){
+  const q = new URLSearchParams({db:META.ucsc_db, wp_target:'genome', wp_f:f, wp_r:r, wp_size:4000, wp_perfect:15, wp_good:15, Submit:'submit'});
+  return 'https://genome.ucsc.edu/cgi-bin/hgPcr?' + q;
+}
+function ucscBrowser(chrom,s,e){ return `https://genome.ucsc.edu/cgi-bin/hgTracks?db=${META.ucsc_db}&position=chr${chrom}:${s}-${e}`; }
+
+function renderAmp(gene, a){
+  const b = a.pairs[0], name = `${gene.gene}_E${a.label}`;
+  const span = a.exons.length>1 ? `Exons ${a.exons[0]}–${a.exons[a.exons.length-1]} combined` : `Exon ${a.exons[0]}`;
+  const frag = a.fragment ? ` · fragment ${a.fragment}` : '';
+  const alts = a.pairs.slice(1).map(p=>`<tr><td>${p.rank}</td><td class="seq">${p.f_seq}${snpLine(p.f_snps,p.f_repeat)}</td><td class="seq">${p.r_seq}${snpLine(p.r_snps,p.r_repeat)}</td><td>${p.f_tm}/${p.r_tm}</td><td>${p.product}</td><td>${esc(ispcrText(p.ispcr))}</td></tr>`).join('');
+  return `<div class="panel amp">
+    <h3>${esc(name)}${a.status==='OK'?'<span class="pill ok">OK</span>':'<span class="pill check">Check</span>'}</h3>
+    <div class="sub">${span}${frag} · target ${fmt(a.target_len)} bp (${esc(META.params.target==='coding'?'coding part':'whole exon')}) · tier <i>${esc(a.tier)}</i>${a.relaxed?' (relaxed)':''}</div>
+    ${a.warnings.length?`<ul class="warns">${a.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}
+    <div class="table-scroll"><table>
+      <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th>Tm °C</th><th>GC %</th><th></th></tr>
+      <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td><td>${b.f_gc}</td>
+          <td><button class="btn copy" data-copy="${b.f_seq}" data-what="Forward primer">Copy</button></td></tr>
+      <tr><td><span class="tag r">R</span></td><td>${esc(name)}R</td><td class="seq">${b.r_seq}${snpLine(b.r_snps, b.r_repeat)}</td><td>${b.r_len}</td><td>${b.r_tm}</td><td>${b.r_gc}</td>
+          <td><button class="btn copy" data-copy="${b.r_seq}" data-what="Reverse primer">Copy</button></td></tr>
+    </table></div>
+    <div class="facts">
+      <div>Product<b>${fmt(b.product)} bp</b></div>
+      <div>F 3′ → exon<b>${b.f_dist} bp</b></div>
+      <div>Exon → R 3′<b>${b.r_dist} bp</b></div>
+      <div>In-silico PCR<b>${esc(ispcrText(b.ispcr))}</b></div>
+      <div>Amplicon (${esc(META.assembly)})<b>chr${esc(b.chrom)}:${fmt(b.start)}-${fmt(b.end)}</b></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <a class="btn" target="_blank" rel="noopener" href="${ucscUrl(b.f_seq,b.r_seq)}">UCSC in-silico PCR</a>
+      <a class="btn" target="_blank" rel="noopener" href="${ucscBrowser(b.chrom,b.start,b.end)}">View in UCSC browser</a>
+      <button class="btn" data-copy="${esc(name)}F\t${b.f_seq}\n${esc(name)}R\t${b.r_seq}" data-what="Primer pair">Copy pair</button>
+      <button class="btn" data-copy="${b.amplicon}" data-what="Amplicon">Copy amplicon</button>
+    </div>
+    <details><summary>Amplicon sequence (exon in colour, primers highlighted, SNPs boxed)</summary>${ampView(b)}</details>
+    ${alts?`<details><summary>${a.pairs.length-1} alternative pair${a.pairs.length>2?'s':''}</summary>
+      <div class="table-scroll"><table class="alt"><tr><th>#</th><th>Forward</th><th>Reverse</th><th>Tm F/R</th><th>Product</th><th>In-silico PCR</th></tr>${alts}</table></div></details>`:''}
+  </div>`;
+}
+
+function ampView(b){
+  const s = b.amplicon, L = s.length, W = 60, snpIdx = new Set();
+  (b.f_snps||[]).forEach(x=>snpIdx.add(b.f_len - x.pos3));
+  (b.r_snps||[]).forEach(x=>snpIdx.add(L - b.r_len + x.pos3 - 1));
+  let out = '';
+  for(let i=0;i<L;i+=W){
+    out += `<span class="n">${String(i+1).padStart(5,' ')}  </span>`;
+    for(let j=i;j<Math.min(i+W,L);j++){
+      const c = s[j], isE = c===c.toUpperCase();
+      const cls = j<b.f_len ? 'pf' : (j>=L-b.r_len ? 'pr' : (isE?'e':''));
+      const k = (cls + (snpIdx.has(j)?' snp':'')).trim();
+      out += k ? `<span class="${k}">${c}</span>` : c;
+    }
+    out += '\n';
+  }
+  return `<pre class="amplicon">${out}</pre>`;
+}
+
+function snpLine(snps, rep){
+  const parts = (snps||[]).map(x=>`<a target="_blank" rel="noopener" href="https://www.ncbi.nlm.nih.gov/snp/${esc(x.rs)}">${esc(x.rs)}</a> ${x.pos3} nt from 3′${x.maf!=null?`, MAF ${x.maf.toFixed(2)}`:''}`);
+  if(rep) parts.push(`${rep} nt in repeat`);
+  return parts.length ? `<span class="snps">${parts.join(' · ')}</span>` : '';
+}
+function ispcrText(ip){
+  if(!ip || !ip.checked) return 'not run';
+  if(ip.off_target && ip.off_target.length) return `${ip.off_target.length} off-target`;
+  return ip.on_target ? 'specific' : 'no product';
+}
+function geneTSV(gene){
+  const rows = [['Name','Sequence','Exon','Product_bp','Tm','Amplicon']];
+  gene.amplicons.forEach(a=>{ const b=a.pairs[0], n=`${gene.gene}_E${a.label}`, loc=`chr${b.chrom}:${b.start}-${b.end}`;
+    rows.push([n+'F', b.f_seq, a.label, b.product, b.f_tm, loc]); rows.push([n+'R', b.r_seq, a.label, b.product, b.r_tm, loc]); });
+  return rows.map(r=>r.join('\t')).join('\n');
+}
+
+$('#q').addEventListener('change', e=>{ const v=e.target.value.trim(); if(v) location.hash = v.toUpperCase(); });
+$('#q').addEventListener('keydown', e=>{ if(e.key==='Enter'){ const v=e.target.value.trim(); if(v) location.hash = v.toUpperCase(); }});
+window.addEventListener('hashchange', route);
+init();
+</script>
+</body>
+</html>

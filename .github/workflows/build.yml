@@ -1,0 +1,108 @@
+name: Build primers and deploy site
+
+# Runs when genes.txt / the script / the site change, or by hand
+# (Actions tab -> "Build primers and deploy site" -> Run workflow).
+on:
+  push:
+    branches: [main]
+    paths: [genes.txt, exonprimer_batch.py, site/**, .github/workflows/build.yml]
+  workflow_dispatch:
+    inputs:
+      assembly:
+        description: Genome build
+        type: choice
+        options: [GRCh38, GRCh37]
+        default: GRCh38
+      ispcr:
+        description: Genome-wide in-silico PCR check (downloads the genome, ~10 min first time)
+        type: boolean
+        default: true
+      extra_args:
+        description: "Extra options, e.g. --min-dist 40 --snp-maf 0.05 --strict"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ASSEMBLY: ${{ inputs.assembly || 'GRCh38' }}
+  RUN_ISPCR: ${{ github.event_name == 'push' || inputs.ispcr }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Offline tests
+        run: python tests/test_offline.py
+
+      - name: Genome db name
+        run: echo "UCSC_DB=$([ "$ASSEMBLY" = GRCh37 ] && echo hg19 || echo hg38)" >> "$GITHUB_ENV"
+
+      # ---- isPcr + genome (.2bit), cached between runs ----
+      - name: Restore isPcr and genome
+        if: env.RUN_ISPCR == 'true'
+        id: genome
+        uses: actions/cache@v4
+        with:
+          path: tools
+          key: ispcr-${{ env.UCSC_DB }}-v1
+
+      - name: Download isPcr and genome
+        if: env.RUN_ISPCR == 'true' && steps.genome.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tools
+          curl -fsSL -o tools/isPcr https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/isPcr
+          chmod +x tools/isPcr
+          curl -fsSL -o tools/${UCSC_DB}.2bit \
+            https://hgdownload.soe.ucsc.edu/goldenPath/${UCSC_DB}/bigZips/${UCSC_DB}.2bit
+
+      - name: Restore web cache (Ensembl / UCSC responses)
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: web-${{ env.ASSEMBLY }}-${{ hashFiles('genes.txt') }}
+          restore-keys: web-${{ env.ASSEMBLY }}-
+
+      - name: Design primers
+        run: |
+          ISPCR_ARGS=""
+          if [ "$RUN_ISPCR" = "true" ] && [ -x tools/isPcr ]; then
+            ISPCR_ARGS="--ispcr tools/isPcr --genome-2bit tools/${UCSC_DB}.2bit"
+          fi
+          python exonprimer_batch.py genes.txt --assembly "$ASSEMBLY" \
+            -o site/exon_primers.xlsx --json-dir site/data $ISPCR_ARGS ${{ inputs.extra_args }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exon_primers
+          path: site/exon_primers.xlsx
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,7 @@
+# One HGNC gene symbol per line.
+# Optional: put an Ensembl transcript ID after the symbol to override the
+# MANE Select transcript, e.g.   BRCA1  ENST00000357654
+POLG
+ANKRD11
+FMR1
+GCH1
