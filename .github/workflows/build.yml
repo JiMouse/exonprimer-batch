@@ -7,14 +7,20 @@ name: Build primers and deploy site
 # "plan" splits genes.txt into chunks, "design" runs one chunk per job, and
 # "merge" stitches the chunks into one site/ and one workbook before deploying.
 #
-# The built data is also published as a release asset, keyed on the inputs that
+# The built data is committed to site/data, so every build records what changed
+# and `git log -p site/data/genes/POLG.json` is that gene's primer history. The
+# workbook is not committed: an xlsx is a zip, so it deltas badly.
+#
+# The data is also published as a release asset, keyed on the inputs that
 # determine it. When only the website changes, "plan" finds that asset, "design"
 # is skipped entirely and "merge" restores the data instead of rebuilding it, so
 # a presentation change deploys in a couple of minutes rather than ~40.
 on:
   push:
     branches: [main]
-    paths: [genes.txt, exonprimer_batch.py, scripts/**, site/**, .github/workflows/build.yml]
+    # site/index.html, not site/**: the built data under site/data is committed
+    # by this workflow, and matching it here would make every build trigger another.
+    paths: [genes.txt, exonprimer_batch.py, scripts/**, site/index.html, .github/workflows/build.yml]
   workflow_dispatch:
     inputs:
       assembly:
@@ -230,6 +236,16 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      # site/data is committed, so the checkout arrives with the previous
+      # build's genes in it. Whatever is restored or merged below is the whole
+      # truth, so clear them first: a gene dropped from genes.txt must not
+      # survive as a stale file that still gets served.
+      - name: Clear the committed gene data
+        run: |
+          n=$(ls site/data/genes/*.json 2>/dev/null | wc -l | tr -d ' ')
+          rm -f site/data/genes/*.json
+          echo "cleared $n gene files from the checkout"
+
       # ---- website-only change: take the published data as it is ----
       - name: Restore published data
         if: needs.plan.outputs.have_data == 'true'
@@ -307,6 +323,36 @@ jobs:
             exit 1
           fi
           echo "all $want chunks present"
+
+      # The data is committed, so each build records what actually changed:
+      # `git log -p site/data/genes/POLG.json` becomes the history of that
+      # gene's primers. Runs after the gate above, so an incomplete build is
+      # never recorded. A failure here must not block the deploy.
+      - name: Commit the built data
+        run: |
+          git add -A site/data
+          if git diff --cached --quiet; then
+            echo "data is identical to what is committed - nothing to record"
+            exit 0
+          fi
+          changed=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q \
+            -m "Built data: $changed files changed" \
+            -m "Assembly $ASSEMBLY, fingerprint ${{ needs.plan.outputs.data_key }}, run $GITHUB_RUN_ID."
+          # main may have moved while the build ran; only data files are ours,
+          # so rebasing onto it is safe.
+          for i in 1 2 3; do
+            if git pull --rebase --autostash -q origin "$GITHUB_REF_NAME" \
+               && git push -q origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "recorded $changed changed files"
+              exit 0
+            fi
+            echo "attempt $i failed - retrying"
+            sleep 5
+          done
+          echo "::warning::could not push the built data; the site deployed anyway"
 
   deploy:
     needs: merge
