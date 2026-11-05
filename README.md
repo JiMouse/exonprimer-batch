@@ -169,6 +169,22 @@ Tune it from the **Actions** tab: `chunk_size` (genes per job, default 150) and 
 (concurrent jobs, default 4). **Keep `max_parallel` low** — every job queries Ensembl and UCSC,
 and parallel jobs multiply that load on public servers.
 
+### Changing the website without rebuilding the data
+
+The built data is also published as an asset on the `data-cache` prerelease, named after a
+fingerprint of the inputs that determine it — `genes.txt`, `exonprimer_batch.py`,
+`scripts/merge_parts.py`, the assembly, the isPcr flag and any extra options. The website is
+deliberately **not** part of that fingerprint.
+
+So editing `site/index.html` leaves the fingerprint unchanged: `plan` finds the published asset,
+the 30 `design` jobs are skipped, `merge` restores the data and the site redeploys in a couple of
+minutes. Editing `genes.txt` changes the fingerprint and the data is rebuilt as usual. Tick
+**force_rebuild** in the Actions tab to rebuild regardless.
+
+The three newest fingerprints are kept and older assets pruned. A partial build is never
+published, so a missing chunk can't be baked in and restored by later website changes. The
+`data-cache` release is not a software release — if you archive releases to Zenodo, exclude it.
+
 Each chunk caches its own Ensembl/UCSC responses, so a re-run only pays for genes that are
 genuinely new. `fail-fast` is off and `merge` runs even if some chunks fail: the site is built
 from whatever succeeded, and the run log warns how many chunks are missing. Re-running the
