@@ -157,3 +157,8 @@ in-silico PCR product demotes a pair.
 - For genes with known pseudogenes, a specific in-silico PCR result does not rule out
   mismatched priming on the paralog — consider long-range PCR or paralog-specific design.
 - GC-rich first exons may need relaxed settings or manual design (flagged in the output).
+
+## Development
+
+Developed with AI assistance (Claude Code). The method, parameters and clinical interpretation
+are the author's; every primer in the output should be reviewed before ordering, as above.
