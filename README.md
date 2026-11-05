@@ -1,8 +1,15 @@
 # exonprimer-batch
 
+### → **[jimouse.github.io/exonprimer-batch](https://jimouse.github.io/exonprimer-batch)**
+
 Intronic PCR/Sanger primers for **every coding exon of a list of genes**, designed the
 ExonPrimer way, exported to **Excel**, and published as a **GitHub Pages site** where you pick a
-gene and an exon to get the precomputed primers.
+gene and an exon — or paste a variant — to get the precomputed primers.
+
+The live site covers **4,471 genes / 60,677 amplicons** (GRCh38, MANE Select), each primer pair
+checked against common SNPs, repeats, segmental duplications and genome-wide in-silico PCR.
+Search a gene (`MTHFR`), a variant (`POLG:c.2243G>C`) or a position (`chr15:89327201`), and
+download the whole panel as one Excel workbook.
 
 > ExonPrimer itself (IHG, Helmholtz Munich) is a web form that does not allow automated
 > access, so this project reproduces its method locally with Primer3 instead of querying it.
@@ -139,9 +146,10 @@ exon, so an intronic variant inside the product is correctly reported as sequenc
 2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 3. Edit `genes.txt` and push — or run the workflow by hand from the **Actions** tab
    (you can choose the assembly and pass extra options there).
-4. The site appears at `https://<user>.github.io/<repo>/`. Links like
-   `…/#MTHFR/5` open a gene and exon directly. The full Excel is downloadable from the site
-   and from each workflow run's artifacts.
+4. The site appears at `https://<user>.github.io/<repo>/` — for this repository,
+   <https://jimouse.github.io/exonprimer-batch>. Links like `…/#MTHFR/5` open a gene and exon
+   directly, and `…/#v=POLG:c.2243G%3EC` opens a variant. The full Excel is downloadable from
+   the site and from each workflow run's artifacts.
 
 The workflow runs the offline tests, designs primers, and deploys `site/` — nothing generated is
 committed to the repository.
