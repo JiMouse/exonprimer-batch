@@ -41,7 +41,7 @@ h1 span{color:var(--accent)}
 .meta a{color:var(--accent)}
 .search{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
 .search input{flex:1 1 260px;min-width:0;font:inherit;font-size:17px;padding:11px 14px;border:1px solid var(--line);
-  border-radius:8px;background:var(--panel);color:var(--ink);text-transform:uppercase}
+  border-radius:8px;background:var(--panel);color:var(--ink)}
 .search input:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .btn{font:inherit;font-size:13px;padding:8px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel);
   color:var(--ink);cursor:pointer;text-decoration:none;white-space:nowrap}
@@ -107,7 +107,7 @@ pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
   </header>
 
   <div class="search">
-    <input id="q" list="genelist" placeholder="Gene, or a variant — MTHFR · NM_000110.4:c.1129G&gt;A · POLG:p.Trp748Ser · chr15:89327201" autocomplete="off" spellcheck="false" aria-label="Gene symbol or HGVS variant">
+    <input id="q" list="genelist" placeholder="Gene, or a variant — MTHFR · NM_000110.4:c.1129G&gt;A · POLG:p.Trp748Ser · chr15:89327201" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Gene symbol or HGVS variant">
     <datalist id="genelist"></datalist>
     <a class="btn" href="exon_primers.xlsx" download>Download all (Excel)</a>
   </div>
