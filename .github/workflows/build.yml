@@ -293,6 +293,21 @@ jobs:
           name: exon_primers
           path: site/exon_primers.xlsx
 
+      # Genes from a missing chunk vanish from the site without appearing in
+      # index.json's error list, so an incomplete build must not replace a
+      # complete one. The merged output stays as an artifact to inspect, and a
+      # re-run completes the set cheaply from the per-chunk caches.
+      - name: Refuse to deploy an incomplete build
+        if: needs.plan.outputs.have_data != 'true'
+        run: |
+          have=$(ls parts 2>/dev/null | wc -l | tr -d ' ')
+          want=${{ needs.plan.outputs.count }}
+          if [ "$have" -lt "$want" ]; then
+            echo "::error::only $have of $want chunks produced output - not deploying, so the current site stays. Re-run the workflow; finished chunks come back from cache."
+            exit 1
+          fi
+          echo "all $want chunks present"
+
   deploy:
     needs: merge
     runs-on: ubuntu-latest

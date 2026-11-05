@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 from collections import Counter
 from pathlib import Path
@@ -35,10 +37,29 @@ REASONS = [
 
 
 def load(src: str, rel: str):
-    if src.startswith(("http://", "https://")):
-        with urllib.request.urlopen(f"{src.rstrip('/')}/{rel}", timeout=120) as r:
-            return json.load(r)
-    return json.loads((Path(src) / rel).read_text())
+    """Read one JSON file, from a directory or over HTTP.
+
+    Thousands of sequential requests will draw 503s from a static host, so
+    remote reads back off and retry. Running against a local directory - a
+    build, or the unpacked data-cache release asset - avoids this entirely.
+    """
+    if not src.startswith(("http://", "https://")):
+        return json.loads((Path(src) / rel).read_text())
+    url = f"{src.rstrip('/')}/{rel}"
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504):
+                raise
+            wait = float(e.headers.get("Retry-After", 2 ** attempt))
+        except urllib.error.URLError:
+            wait = 2 ** attempt
+        if attempt == 0:
+            print(f"  {url}: retrying", file=sys.stderr)
+        time.sleep(wait)
+    raise RuntimeError(f"gave up on {url}")
 
 
 def classify(pair: dict, amp: dict) -> str:
@@ -65,6 +86,7 @@ def rank(reason: str) -> int:
 
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else "site/data"
+    remote = src.startswith(("http://", "https://"))
     index = load(src, "index.json")
     genes = index["genes"]
     print(f"{index['assembly']} · built {index['generated']} · {len(genes)} genes\n")
@@ -76,6 +98,8 @@ def main():
             totals["ok"] += g.get("ok", 0)
             continue
         d = load(src, f"genes/{g['gene']}.json")
+        if remote:
+            time.sleep(0.05)
         for a in d["amplicons"]:
             totals["amplicons"] += 1
             if a.get("status") == "OK":
