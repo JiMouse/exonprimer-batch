@@ -310,6 +310,9 @@ jobs:
 
   deploy:
     needs: merge
+    # design is skipped on a website-only change, and a skipped job upstream
+    # would otherwise skip this one too, deploying nothing.
+    if: always() && needs.merge.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
