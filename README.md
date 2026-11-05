@@ -103,6 +103,36 @@ isPcr indexes the whole genome in memory (several GB of RAM). If it fails, the r
 and the output says "in-silico PCR not run". On macOS the downloaded binary is unsigned, so
 Gatekeeper may need `xattr -d com.apple.quarantine tools/isPcr`.
 
+## Find the primers for a variant
+
+The search box takes a variant as well as a gene symbol, and answers with the amplicon that
+sequences it:
+
+```
+NM_000110.4:c.1129G>A      POLG:c.2243G>C       POLG:p.Trp748Ser
+c.2243-12T>C               CFTR:c.1521_1523del  chr15:89327201
+```
+
+It resolves `c.`, `n.`, `g.` and `p.` descriptions, intron offsets (`c.1129+5`), ranges
+(`c.1129_1130del`) and plain coordinates. A gene symbol always wins over variant parsing, so a
+symbol is never misread. Links are shareable: `…/#v=POLG:c.2243G%3EC`.
+
+This runs entirely in the browser — the published JSON already carries each transcript's CDS
+structure, strand and amplicon spans, so no server or API is involved.
+
+Three things it deliberately does **not** guess:
+
+- **A different transcript.** The panel is built on MANE Select. A matching accession with a
+  different version is used but flagged; a different accession is refused rather than
+  renumbered, because `c.` coordinates would not agree.
+- **Deep intronic variants.** Primers reach about `--primer-region` bp into the flanks, so a
+  variant further in is reported as covered by no amplicon, never rounded to the nearest exon.
+- **UTR variants.** `c.-45` and `c.*120` lie outside the coding target and are refused.
+
+When the variant states a reference allele it is checked against the amplicon sequence, which
+catches a wrong genome build or a typo. Primers are matched on the **PCR product** span, not the
+exon, so an intronic variant inside the product is correctly reported as sequenceable.
+
 ## Publish the website on GitHub
 
 1. Create a repository and push this folder to its `main` branch.
@@ -143,6 +173,12 @@ Expect retired gene symbols to fail: Ensembl does not follow HGNC aliases, so `G
 resolve to nothing and land in the Problems sheet. Use current symbols.
 
 ## Tests
+
+`node tests/test_hgvs.mjs` tests the variant lookup. It extracts the resolver from
+`site/index.html` between the `HGVS-RESOLVER` markers, so it exercises the code that is actually
+served, against synthetic genes on both strands: CDS mapping, intron offsets in the right
+direction per strand, reference-base read-back, and that UTR, out-of-range, wrong-chromosome and
+deep-intronic lookups are refused rather than answered wrongly.
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
 Ensembl/UCSC/isPcr responses. It checks primer coordinates against the genome, minimum distance,

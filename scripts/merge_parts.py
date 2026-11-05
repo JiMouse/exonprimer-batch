@@ -34,6 +34,17 @@ STATUS_FILL = {"OK": PatternFill("solid", start_color="D5EFD9"),
 SEQ_COLS = {"Primers": {7, 8}, "Alternatives": {3, 4}, "Amplicons": {4}}
 
 
+def gene_bounds(part: Path, name: str) -> tuple[int, int] | None:
+    """Transcript span of a gene, so the site can find a gene from a coordinate."""
+    f = part / "data" / "genes" / f"{name}.json"
+    if not f.exists():
+        return None
+    ex = json.loads(f.read_text()).get("exons") or []
+    if not ex:
+        return None
+    return min(e["start"] for e in ex), max(e["end"] for e in ex)
+
+
 def merge_index(parts: list[Path]) -> dict:
     """Concatenate the per-chunk index.json files, keeping run-wide settings."""
     merged: dict | None = None
@@ -45,6 +56,12 @@ def merge_index(parts: list[Path]) -> dict:
             print(f"  warning: {f} missing, chunk skipped", file=sys.stderr)
             continue
         d = json.loads(f.read_text())
+        # Carry each gene's span into the index so an HGVS or coordinate search
+        # can pick the gene without fetching every gene file.
+        for g in d.get("genes", []):
+            b = gene_bounds(p, g["gene"])
+            if b:
+                g["start"], g["end"] = b
         if merged is None:
             merged = {k: v for k, v in d.items() if k not in ("genes", "errors")}
         elif not d.get("ispcr", False):

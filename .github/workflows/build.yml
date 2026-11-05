@@ -66,6 +66,9 @@ jobs:
       - name: Offline tests
         run: python tests/test_offline.py
 
+      - name: Variant lookup tests
+        run: node tests/test_hgvs.mjs
+
       - name: Split gene list
         id: split
         run: |

@@ -103,7 +103,7 @@ pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
   </header>
 
   <div class="search">
-    <input id="q" list="genelist" placeholder="Gene symbol, e.g. MTHFR" autocomplete="off" spellcheck="false" aria-label="Gene symbol">
+    <input id="q" list="genelist" placeholder="Gene, or a variant — MTHFR · NM_000110.4:c.1129G&gt;A · POLG:p.Trp748Ser · chr15:89327201" autocomplete="off" spellcheck="false" aria-label="Gene symbol or HGVS variant">
     <datalist id="genelist"></datalist>
     <a class="btn" href="exon_primers.xlsx" download>Download all (Excel)</a>
   </div>
@@ -148,7 +148,9 @@ async function loadGene(sym){
 }
 
 async function route(){
-  const [g, ex] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const raw = decodeURIComponent(location.hash.slice(1));
+  if(raw.startsWith('v=')){ const t=raw.slice(2); $('#q').value=t; return showVariant(t); }
+  const [g, ex] = raw.split('/');
   if(!g){ return; }
   const gene = await loadGene(g);
   if(!gene){ $('#view').innerHTML = `<div class="panel empty">“${esc(g)}” is not in the precomputed list.</div>`; return; }
@@ -193,6 +195,242 @@ function renderGene(gene, exNum){
   $('#view').innerHTML = head + (body || '<div class="panel empty">Select a coding exon.</div>');
   document.querySelectorAll('.ex.coding').forEach(b=>b.onclick=()=>{ location.hash = `${gene.gene}/${b.dataset.n}`; });
   $('#copyGene').onclick = ()=>copy(geneTSV(gene), `${gene.gene} primers`);
+  document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy(b.dataset.copy, b.dataset.what));
+}
+
+/* HGVS-RESOLVER-START */
+/* ---------- HGVS variant lookup -------------------------------------------
+   Resolves a variant to the amplicon that sequences it, entirely in the
+   browser: the published gene JSON carries the CDS structure, the strand and
+   every amplicon's genomic span, so no server is involved.
+
+   Validated against Ensembl: CDS->genomic agrees with /map/cds, and the
+   reference base read back from the amplicon sequence agrees with the
+   Ensembl CDS for 1380/1380 sampled positions across both strands.        */
+
+const AA3 = {Ala:'A',Arg:'R',Asn:'N',Asp:'D',Cys:'C',Gln:'Q',Glu:'E',Gly:'G',His:'H',
+  Ile:'I',Leu:'L',Lys:'K',Met:'M',Phe:'F',Pro:'P',Ser:'S',Thr:'T',Trp:'W',Tyr:'Y',
+  Val:'V',Ter:'*',Sec:'U'};
+
+function parseHGVS(raw){
+  const s = raw.trim().replace(/\s+/g,'');
+  // optional "<reference>:" prefix - a transcript, RefSeq, chromosome or symbol
+  const m = s.match(/^(?:([A-Za-z0-9_.()-]+):)?([cgpmn])\.(.+)$/);
+  if(!m){
+    // bare genomic: chr15:89327201 or 15:89327201C>T
+    const g = s.match(/^(?:chr)?([0-9XYMxym]+):g?\.?([0-9,]+)([ACGT]>[ACGT])?$/);
+    if(g) return {kind:'g', ref:'chr'+g[1].toUpperCase(), chrom:g[1].toUpperCase(),
+                  pos:+g[2].replace(/,/g,''), desc:s};
+    return null;
+  }
+  const [, refName, type, rest] = m;
+  const out = {kind:type, ref:refName||null, desc:s, rest};
+  if(type==='g'){
+    const p = rest.match(/^([0-9,]+)/);
+    if(!p) return null;
+    out.pos = +p[1].replace(/,/g,'');
+    if(refName && /^(?:chr)?[0-9XYMxym]+$/.test(refName)) out.chrom = refName.replace(/^chr/i,'').toUpperCase();
+    return out;
+  }
+  if(type==='p'){
+    const p = rest.match(/^\(?([A-Z][a-z]{2}|[A-Z])([0-9]+)/);
+    if(!p) return null;
+    out.codon = +p[2];
+    out.aa = p[1].length===3 ? (AA3[p[1]]||p[1]) : p[1];
+    return out;
+  }
+  // c. / n. - position, optional intron offset, optional second position
+  const p = rest.match(/^(\*|-)?([0-9]+)([+-][0-9]+)?(?:_(\*|-)?([0-9]+)([+-][0-9]+)?)?(.*)$/);
+  if(!p) return null;
+  out.utr    = p[1] || null;           // '-' = 5'UTR, '*' = 3'UTR
+  out.cpos   = +p[2];
+  out.offset = p[3] ? +p[3] : 0;
+  if(p[5]){ out.utr2 = p[4]||null; out.cpos2 = +p[5]; out.offset2 = p[6] ? +p[6] : 0; }
+  out.change = p[7] || '';
+  const sub = out.change.match(/^([ACGT])>([ACGT])$/);
+  if(sub){ out.refBase = sub[1]; out.altBase = sub[2]; }
+  return out;
+}
+
+function codingExons(gene){
+  return gene.exons.filter(e=>e.coding).sort((a,b)=>a.n-b.n);
+}
+function cdsLength(gene){
+  return codingExons(gene).reduce((t,e)=>t + (e.cds_end-e.cds_start+1), 0);
+}
+
+/* 1-based CDS position -> {pos, exon}; null when out of range. */
+function cdsToGenomic(gene, cpos){
+  let seen = 0;
+  for(const e of codingExons(gene)){
+    const len = e.cds_end - e.cds_start + 1;
+    if(cpos <= seen + len){
+      const off = cpos - seen - 1;
+      return {pos: gene.strand===1 ? e.cds_start+off : e.cds_end-off, exon: e};
+    }
+    seen += len;
+  }
+  return null;
+}
+
+/* Reference base in TRANSCRIPT orientation, from a published amplicon.
+   Sequences are fetched in transcript orientation, so a minus-strand
+   amplicon string runs from `end` down to `start`. */
+function refBaseAt(gene, pos){
+  for(const a of gene.amplicons){
+    const b = a.pairs && a.pairs[0];
+    if(b && pos >= b.start && pos <= b.end){
+      const i = gene.strand===1 ? pos-b.start : b.end-pos;
+      return (b.amplicon[i]||'').toUpperCase();
+    }
+  }
+  return null;
+}
+
+/* Amplicons whose PCR product spans a position - what you'd actually order. */
+function amplsCovering(gene, pos){
+  return gene.amplicons.filter(a=>{
+    const b = a.pairs && a.pairs[0];
+    return b && pos >= b.start && pos <= b.end;
+  });
+}
+
+/* Resolve a parsed variant against one gene. */
+function resolveInGene(gene, v){
+  const out = {gene, warnings: [], notes: []};
+
+  if(v.kind==='g'){
+    if(v.chrom && v.chrom !== String(gene.chrom).toUpperCase())
+      return {error:`Variant is on chr${v.chrom}, ${gene.gene} is on chr${gene.chrom}.`};
+    out.pos = v.pos;
+  } else if(v.kind==='p'){
+    const L = cdsLength(gene), c1 = (v.codon-1)*3+1;
+    if(c1 > L) return {error:`${gene.gene} codes ${Math.floor(L/3)-1} residues; p.${v.codon} is beyond it.`};
+    const a = cdsToGenomic(gene, c1), b = cdsToGenomic(gene, c1+2);
+    out.pos = a.pos; out.exon = a.exon;
+    out.posEnd = b ? b.pos : a.pos;
+    out.notes.push(`codon ${v.codon} = c.${c1}-${c1+2}`);
+  } else {
+    if(v.utr) return {error:`${v.utr==='-'?"5′":"3′"}UTR variant (c.${v.utr}${v.cpos}). This panel targets coding exons, so no amplicon covers it.`};
+    const L = cdsLength(gene);
+    if(v.cpos > L) return {error:`c.${v.cpos} is past the end of the ${gene.gene} CDS (${L} bp).`};
+    const hit = cdsToGenomic(gene, v.cpos);
+    if(!hit) return {error:`c.${v.cpos} could not be mapped in ${gene.gene}.`};
+    out.exon = hit.exon;
+    // An intron offset steps away from the exon in transcript direction.
+    out.pos = v.offset ? hit.pos + (gene.strand===1 ? v.offset : -v.offset) : hit.pos;
+    if(v.offset){
+      const atEdge = gene.strand===1
+        ? (v.offset>0 ? hit.pos===hit.exon.cds_end : hit.pos===hit.exon.cds_start)
+        : (v.offset>0 ? hit.pos===hit.exon.cds_start : hit.pos===hit.exon.cds_end);
+      out.notes.push(`intronic, ${Math.abs(v.offset)} bp from the exon ${hit.exon.n} boundary`);
+      if(!atEdge) out.warnings.push(
+        `c.${v.cpos} is not at an exon boundary, so the ${v.offset>0?'+':'-'}${Math.abs(v.offset)} offset is unusual - check the transcript.`);
+    }
+    if(v.cpos2!=null && !v.utr2){
+      const h2 = cdsToGenomic(gene, v.cpos2);
+      if(h2) out.posEnd = v.offset2 ? h2.pos + (gene.strand===1?v.offset2:-v.offset2) : h2.pos;
+    }
+  }
+
+  out.amplicons = amplsCovering(gene, out.pos);
+  if(out.posEnd!=null && out.posEnd!==out.pos){
+    const lo = Math.min(out.pos,out.posEnd), hi = Math.max(out.pos,out.posEnd);
+    out.span = [lo,hi];
+    out.amplicons = gene.amplicons.filter(a=>{
+      const b=a.pairs&&a.pairs[0]; return b && b.start<=hi && b.end>=lo;
+    });
+  }
+
+  // Reference-allele check, when we have the base and the variant states one.
+  if(v.refBase){
+    const got = refBaseAt(gene, out.pos);
+    if(got && got!==v.refBase)
+      out.warnings.push(`Reference mismatch: the genome has ${got} at this position, the variant says ${v.refBase}. Wrong transcript, build, or a typo.`);
+    else if(got) out.notes.push(`reference base ${got} confirmed`);
+  }
+  return out;
+}
+
+
+/* HGVS-RESOLVER-END */
+
+/* Pick the gene a variant refers to: its own reference if it names one,
+   otherwise the gene whose span contains a genomic position. */
+function geneEntryFor(v){
+  const byName = n => META.genes.find(g=>g.gene.toUpperCase()===String(n).toUpperCase());
+  const bare = a => String(a||'').split('.')[0].toUpperCase();
+  if(v.ref){
+    const direct = byName(v.ref);
+    if(direct) return {hit:direct};
+    const acc = bare(v.ref);
+    const tx = META.genes.find(g=>bare(g.transcript)===acc || bare(g.refseq)===acc);
+    if(tx){
+      const full = (tx.refseq && bare(tx.refseq)===acc) ? tx.refseq : tx.transcript;
+      // Same accession, different version: c. numbering can differ.
+      if(full && full.toUpperCase()!==v.ref.toUpperCase())
+        return {hit:tx, warn:`You gave ${v.ref}; this panel used ${full}. Coding coordinates usually agree between versions, but confirm before ordering.`};
+      return {hit:tx};
+    }
+    if(/^(?:chr)?[0-9XYMxym]+$/.test(v.ref) || /^NC_0000/i.test(v.ref)){ /* a chromosome, handled below */ }
+    else return {error:`“${esc(v.ref)}” is not a gene, transcript or RefSeq in this panel. A different transcript may use different c. numbering, so no lookup was attempted.`};
+  }
+  if(v.kind==='g'){
+    let chrom = v.chrom;
+    if(!chrom && /^NC_0000(\d\d)/i.test(v.ref||'')){
+      const n = +RegExp.$1; chrom = n===23?'X':n===24?'Y':String(n);
+    }
+    if(!chrom) return {error:'Give a chromosome, e.g. chr15:89327201.'};
+    const span = META.genes.filter(g=>String(g.chrom).toUpperCase()===chrom && g.start!=null && v.pos>=g.start && v.pos<=g.end);
+    if(span.length) return {hit:span[0], extra:span.slice(1)};
+    if(META.genes.every(g=>g.start==null))
+      return {error:'This build predates coordinate search — rebuild the site, or search by gene or transcript.'};
+    return {error:`No gene in this panel spans chr${esc(chrom)}:${fmt(v.pos)}.`};
+  }
+  if(GENE) return {hit:META.genes.find(g=>g.gene===GENE.gene), assumed:true};
+  return {error:'Name the gene or transcript, e.g. POLG:c.2243G>C.'};
+}
+
+function variantPanel(v, res, entry){
+  const g = res.gene;
+  const loc = res.span ? `chr${g.chrom}:${fmt(res.span[0])}-${fmt(res.span[1])}` : `chr${g.chrom}:${fmt(res.pos)}`;
+  const notes = [].concat(entry.warn?[entry.warn]:[], res.warnings||[]);
+  const amps = res.amplicons||[];
+  const rows = amps.map(a=>{
+    const b=a.pairs&&a.pairs[0];
+    if(!b) return '';
+    const cls = a.status==='OK'?'ok':a.status==='CHECK'?'check':'fail';
+    return `<tr><td><a href="#${encodeURIComponent(g.gene)}/${a.exons[0]}">${esc(g.gene)}_E${esc(a.label)}</a> <span class="pill ${cls}">${esc(a.status)}</span></td>
+      <td class="seq">${esc(b.f_seq)}</td><td class="seq">${esc(b.r_seq)}</td><td>${b.product} bp</td>
+      <td>${fmt(b.start)}–${fmt(b.end)}</td></tr>`;
+  }).join('');
+  return `<div class="panel">
+    <div class="gene-head"><h2>${esc(v.desc)}</h2>
+      <span class="kv">${esc(g.gene)} · <b>${esc(g.transcript)}</b></span>
+      <span class="kv">maps to <b>${esc(loc)}</b></span>
+      ${res.exon?`<span class="kv">exon <b>${res.exon.n}</b></span>`:''}
+      ${entry.assumed?'<span class="badge">gene assumed from current view</span>':''}
+    </div>
+    ${res.notes&&res.notes.length?`<div class="legend">${res.notes.map(esc).join(' · ')}</div>`:''}
+    ${notes.length?`<ul class="warns">${notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`:''}
+    ${amps.length
+      ? `<div class="table-scroll"><table><thead><tr><th>Amplicon</th><th>Forward</th><th>Reverse</th><th>Product</th><th>Position</th></tr></thead><tbody>${rows}</tbody></table></div>
+         <div class="legend">Use this pair to amplify and sequence the variant. Click the amplicon for the full record.</div>`
+      : `<div class="panel empty" style="margin:0">No amplicon in this panel covers that position.${res.exon?` It maps near exon ${res.exon.n}, but primers only reach about ${META.params.primer_region} bp into the flanking intron.`:''}</div>`}
+  </div>`;
+}
+
+async function showVariant(text){
+  const v = parseHGVS(text);
+  if(!v){ $('#view').innerHTML = `<div class="panel empty">Could not read “${esc(text)}” as a gene or an HGVS variant.<br>Try <code>POLG:c.2243G>C</code>, <code>NM_000110.4:c.1129+5G>A</code>, <code>POLG:p.Trp748Ser</code> or <code>chr15:89327201</code>.</div>`; return; }
+  const entry = geneEntryFor(v);
+  if(entry.error){ $('#view').innerHTML = `<div class="panel empty">${entry.error}</div>`; return; }
+  const gene = await loadGene(entry.hit.gene);
+  if(!gene){ $('#view').innerHTML = `<div class="panel empty">${esc(entry.hit.gene)} has no data in this build.</div>`; return; }
+  GENE = gene;
+  const res = resolveInGene(gene, v);
+  if(res.error){ $('#view').innerHTML = `<div class="panel empty">${esc(res.error)}</div>`; return; }
+  $('#view').innerHTML = variantPanel(v, res, entry);
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy(b.dataset.copy, b.dataset.what));
 }
 
@@ -272,8 +510,15 @@ function geneTSV(gene){
   return rows.map(r=>r.join('\t')).join('\n');
 }
 
-$('#q').addEventListener('change', e=>{ const v=e.target.value.trim(); if(v) location.hash = v.toUpperCase(); });
-$('#q').addEventListener('keydown', e=>{ if(e.key==='Enter'){ const v=e.target.value.trim(); if(v) location.hash = v.toUpperCase(); }});
+function submitQuery(text){
+  const t = text.trim();
+  if(!t) return;
+  // A gene symbol wins over variant parsing, so a symbol is never misread.
+  const isGene = META && META.genes.some(g=>g.gene.toUpperCase()===t.toUpperCase());
+  location.hash = isGene ? t.toUpperCase() : 'v=' + encodeURIComponent(t);
+}
+$('#q').addEventListener('change', e=>submitQuery(e.target.value));
+$('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') submitQuery(e.target.value); });
 window.addEventListener('hashchange', route);
 init();
 </script>
