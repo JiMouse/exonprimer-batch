@@ -80,7 +80,9 @@ jobs:
         run: python tests/test_offline.py
 
       - name: Variant lookup tests
-        run: node tests/test_hgvs.mjs
+        run: |
+          node tests/test_hgvs.mjs
+          node tests/test_page.mjs
 
       # Everything that changes the primers goes into the fingerprint; the
       # website does not, which is the whole point.

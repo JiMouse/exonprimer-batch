@@ -198,11 +198,17 @@ resolve to nothing and land in the Problems sheet. Use current symbols.
 
 ## Tests
 
-`node tests/test_hgvs.mjs` tests the variant lookup. It extracts the resolver from
-`site/index.html` between the `HGVS-RESOLVER` markers, so it exercises the code that is actually
-served, against synthetic genes on both strands: CDS mapping, intron offsets in the right
-direction per strand, reference-base read-back, and that UTR, out-of-range, wrong-chromosome and
-deep-intronic lookups are refused rather than answered wrongly.
+`node tests/test_hgvs.mjs` tests the variant resolver. It extracts the code from
+`site/index.html` between the `HGVS-RESOLVER` markers, so it exercises what is actually served,
+against synthetic genes on both strands: CDS mapping, intron offsets in the right direction per
+strand, reference-base read-back, and that UTR, out-of-range, wrong-chromosome and deep-intronic
+lookups are refused rather than answered wrongly.
+
+`node tests/test_page.mjs` tests the page around it: the whole `<script>` runs against a stubbed
+DOM and a stubbed `fetch` serving synthetic genes. It covers which gene a variant resolves to —
+by symbol, Ensembl transcript, RefSeq, or coordinate — the transcript-safety rules (a version
+difference warns, a different accession is refused), what the result panel renders, and that a
+gene symbol is never routed as a variant.
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
 Ensembl/UCSC/isPcr responses. It checks primer coordinates against the genome, minimum distance,
@@ -210,8 +216,27 @@ coverage of every coding base, SNP avoidance and the 3′-end rule, the MAF cut-
 avoidance and the 5′-only fallback, segmental-duplication alerts, and that an off-target
 in-silico PCR product demotes a pair.
 
+## Triaging the Check rows
+
+A large panel produces thousands of **Check** amplicons, and the reasons carry very different
+risk: an off-target product may amplify a paralog, while a repeat touching a primer's 5′ end is
+usually harmless. In sheet order they look alike, so most of the reading goes on the benign
+majority.
+
+```bash
+python scripts/triage_checks.py site/data                              # a local build
+python scripts/triage_checks.py https://<user>.github.io/<repo>/data   # the published site
+```
+
+It counts the amplicons by their most serious reason — off-target, segmental duplication, no
+product, SNP under a primer, relaxed settings, 5′ repeat — and then lists the ones where **no
+alternative pair avoids the problem**. Those are the real redesign queue: everywhere else, the
+Alternatives sheet already holds a pair that sidesteps the issue.
+
 ## Before ordering primers
 
+- Start with `scripts/triage_checks.py`, worst reason first, rather than reading the Primers
+  sheet in order.
 - Review every **Check** row: SNPs near the 3′ end, repeats, segmental duplications, off-target
   products.
 - For genes with known pseudogenes, a specific in-silico PCR result does not rule out
