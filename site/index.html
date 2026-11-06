@@ -9,24 +9,11 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#f6f7f5; --panel:#ffffff; --ink:#1b2422; --muted:#5f6d69; --line:#dde3e0;
+  color-scheme:light;
+  --bg:#f8f9f8; --panel:#ffffff; --sunken:#f1f4f3; --ink:#1b2422; --muted:#5f6d69; --line:#dde3e0;
   --accent:#1f6f66; --accent-soft:#e2f0ed; --exon:#1f6f66; --utr:#b9c4c0;
   --fwd:#c9eccf; --fwd-ink:#17602a; --rev:#e7dcf6; --rev-ink:#5a2d91;
-  --warn:#9a5b00; --warn-soft:#fdf1dc; --ok:#1d7a3a; --ok-soft:#dcf1e1; --bad:#b3261e; --bad-soft:#f9dedc;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#121716; --panel:#1a211f; --ink:#e3ebe8; --muted:#94a39e; --line:#2b3532;
-    --accent:#5cc4b5; --accent-soft:#1d3532; --exon:#4fb3a5; --utr:#3d4a46;
-    --fwd:#1f4528; --fwd-ink:#9fe2ad; --rev:#3a2d52; --rev-ink:#d2b9f5;
-    --warn:#f0b45a; --warn-soft:#3a2c14; --ok:#7fd99a; --ok-soft:#1c3424; --bad:#f2948c; --bad-soft:#3d1d1b;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#121716; --panel:#1a211f; --ink:#e3ebe8; --muted:#94a39e; --line:#2b3532;
-  --accent:#5cc4b5; --accent-soft:#1d3532; --exon:#4fb3a5; --utr:#3d4a46;
-  --fwd:#1f4528; --fwd-ink:#9fe2ad; --rev:#3a2d52; --rev-ink:#d2b9f5;
-  --warn:#f0b45a; --warn-soft:#3a2c14; --ok:#7fd99a; --ok-soft:#1c3424; --bad:#f2948c; --bad-soft:#3d1d1b;
+  --warn:#8a5200; --warn-soft:#fdf1dc; --ok:#1d7a3a; --ok-soft:#dcf1e1; --bad:#b3261e; --bad-soft:#f9dedc;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
@@ -84,7 +71,7 @@ td.seq{font:600 14px "IBM Plex Mono",monospace;letter-spacing:.02em;word-break:b
 .facts b{display:block;font:500 15px "IBM Plex Mono",monospace;color:var(--ink)}
 details{margin-top:14px}
 summary{cursor:pointer;color:var(--accent);font-size:13.5px}
-pre.amplicon{font:13px/1.7 "IBM Plex Mono",monospace;background:var(--bg);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:10px 0 0;white-space:pre}
+pre.amplicon{font:13px/1.7 "IBM Plex Mono",monospace;background:var(--sunken);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:10px 0 0;white-space:pre}
 pre.amplicon .n{color:var(--muted);user-select:none}
 pre.amplicon .e{color:var(--exon);font-weight:600}
 pre.amplicon .pf{background:var(--fwd);color:var(--fwd-ink)}
