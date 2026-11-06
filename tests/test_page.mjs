@@ -51,6 +51,14 @@ function mkGene(name, chrom, strand, transcript, refseq){
 }
 
 const PLUSG  = mkGene('PLUSG',  '7',  1, 'ENST00000000001.3', 'NM_000001.4');
+/* Rank 1 mismatched (dTm 4), rank 2 matched (dTm 0.5): lets the dTm
+   preference be exercised without touching the other genes. */
+{
+  const a = PLUSG.amplicons[0], p1 = a.pairs[0];
+  p1.f_tm = 62; p1.r_tm = 58;
+  a.pairs.push({...p1, rank:2, f_tm:60, r_tm:60.5, f_seq:'ACGTACGTACGTACGTAA',
+                r_seq:'TGCATGCATGCATGCATT', penalty:2});
+}
 const MINUSG = mkGene('MINUSG', '8', -1, 'ENST00000000002.1', 'NM_000002.2');
 
 const INDEX = {
@@ -86,9 +94,29 @@ globalThis.history = {pushState(){}};
 globalThis.window = {addEventListener(){}};
 Object.defineProperty(globalThis, 'navigator',
   {value:{clipboard:{writeText:()=>Promise.resolve()}}, configurable:true});
+/* UCSC API stub: NM_777777.1 is a second transcript of PLUSG that numbers
+   its CDS 9 bp later (an extra upstream coding exon), and shares exon 2
+   exactly. UCSC rows are 0-based half-open, as the real API serves them. */
+const UCSC_ROW = {
+  name:'NM_777777.1', name2:'PLUSG', chrom:'chr7', strand:'+',
+  txStart:899, txEnd:3009, cdsStart:899, cdsEnd:3009,
+  exonStarts:'899,999,1999,2999,', exonEnds:'909,1009,2009,3009,',
+};
+let ucscCalls = 0;
 globalThis.fetch = async u => {
-  if(!(u in FILES)) throw new Error('404 ' + u);
-  return {json: async () => JSON.parse(JSON.stringify(FILES[u]))};
+  if(u in FILES) return {json: async () => JSON.parse(JSON.stringify(FILES[u]))};
+  if(u.startsWith('https://api.genome.ucsc.edu/')){
+    ucscCalls++;
+    if(u.includes('/search')){
+      if(!u.includes('NM_777777')) return {ok:true, json:async()=>({positionMatches:[]})};
+      return {ok:true, json: async () => ({positionMatches:[{name:'ncbiRefSeqCurated',
+        matches:[{position:'chr7:900-3009', posName:'PLUSG (NM_777777.1)'}]}]})};
+    }
+    if(u.includes('track=ncbiRefSeqCurated'))
+      return {ok:true, json: async () => ({ncbiRefSeqCurated:[UCSC_ROW]})};
+    return {ok:true, json: async () => ({})};
+  }
+  throw new Error('404 ' + u);
 };
 
 const page = fs.readFileSync(path.join(import.meta.dirname, '..', 'site', 'index.html'), 'utf8');
@@ -96,6 +124,8 @@ const script = page.match(/<script>([\s\S]*)<\/script>/);
 if(!script){ console.error('no <script> block in site/index.html'); process.exit(1); }
 const api = new Function(script[1] + `
   return {init, route, showVariant, geneEntryFor, parseHGVS, submitQuery,
+          renderGene, geneTSV, ucscRowToModel, ucscTranscript, resolveViaUcsc,
+          orderedPairs, bestPair, dTm, setPref:v=>{PREF_MATCHED=v},
           view:()=>document.querySelector('#view').innerHTML};`)();
 
 let pass = 0, fail = 0;
@@ -123,7 +153,8 @@ ok(ver.hit && ver.hit.gene === 'PLUSG', 'older RefSeq version still resolves');
 ok(ver.warn && /NM_000001\.4/.test(ver.warn), 'version difference is flagged, not silent');
 
 const unk = api.geneEntryFor(api.parseHGVS('NM_999999.9:c.15T>G'));
-ok(unk.error && !unk.hit, 'unknown transcript is refused, never renumbered');
+ok(!unk.hit && unk.lookup === 'NM_999999.9',
+   'unknown transcript is never renumbered against our own, it is offered for lookup');
 
 const byPos = api.geneEntryFor(api.parseHGVS('chr7:2005'));
 ok(byPos.hit && byPos.hit.gene === 'PLUSG', 'gene found from a coordinate');
@@ -162,11 +193,98 @@ ok(has('past the end'), 'position beyond the CDS is refused');
 await api.showVariant('utter nonsense');
 ok(has('Could not read'), 'unparseable input gets a usable message');
 
+/* ---- a real symbol outside the panel is not "unreadable HGVS" ---- */
+await api.showVariant('TUBB4B');
+ok(has('not in our database') && !has('Could not read'),
+   'a symbol-shaped query absent from the panel says so instead of blaming HGVS');
+ok(has('2 genes'), 'and says how many genes the panel covers');
+
+await api.showVariant('PLUSH');
+ok(has('Did you mean') && has('>PLUSG<'), 'a one-letter typo suggests the real symbol');
+
+await api.showVariant('NM_999999.9');
+ok(has('not in our database'), 'a bare accession is treated as a missing reference too');
+
+await api.showVariant('TUBB4B:c.100G>A');
+ok(has('not a gene, transcript or RefSeq in our database'),
+   'and the same wording covers an HGVS variant on a gene we do not carry');
+
 await api.showVariant('NM_999999.9:c.15T>G');
-ok(has('not a gene, transcript or RefSeq'), 'unknown reference reaches the reader');
+ok(has('is not the transcript this panel uses') && has('Resolve NM_999999.9 via UCSC'),
+   'an unknown transcript offers the UCSC conversion instead of a dead end');
+ok(!has('<table'), 'and renders no primers until the conversion is actually run');
 
 await api.showVariant('chr7:2005');
 ok(has('PLUSG_E2'), 'bare coordinate finds the amplicon');
+
+/* ---- dTm: shown, and optionally preferred (A2/A3) ---- */
+globalThis.location.hash = '';
+api.setPref(false);
+await api.showVariant('PLUSG:c.15T>G');
+ok(has('\u0394Tm'), 'the variant table carries a dTm column');
+
+const amp = JSON.parse(JSON.stringify(PLUSG)).amplicons[0];
+ok(api.dTm(amp.pairs[0]).toFixed(1) === '4.0', 'dTm is read off the published Tm values');
+ok(api.bestPair(amp) === amp.pairs[0], 'with the preference off, Primer3 rank 1 is shown');
+api.setPref(true);
+ok(api.bestPair(amp).rank === 2, 'with it on, the matched alternative comes first');
+ok(api.orderedPairs(amp).length === amp.pairs.length, 'no pair is dropped by the re-ordering');
+api.setPref(false);
+ok(api.bestPair(amp).rank === 1, 'and the preference is reversible');
+
+/* A promotion must never trade away genome-wide specificity. */
+const risky = JSON.parse(JSON.stringify(PLUSG)).amplicons[0];
+risky.pairs[1].ispcr = {checked:true, on_target:true, off_target:[{chrom:'chr9'}]};
+api.setPref(true);
+ok(api.bestPair(risky).rank === 1,
+   'a matched alternative with an off-target product is not promoted');
+ok(api.orderedPairs(risky).length === risky.pairs.length, 'and it is still listed');
+api.setPref(false);
+
+/* A matched rank 1 must never be displaced. */
+const good = JSON.parse(JSON.stringify(PLUSG)).amplicons[0];
+good.pairs[0].f_tm = 60; good.pairs[0].r_tm = 60;
+api.setPref(true);
+ok(api.bestPair(good).rank === 1, 'an already-matched rank 1 is left alone');
+api.setPref(false);
+
+/* The TSV export carries the delta too. */
+ok(api.geneTSV(PLUSG).split('\n')[0].includes('dTm_pair'), 'TSV export includes dTm');
+
+/* ---- an unknown transcript resolved through UCSC (A4/A5) ---- */
+const before = ucscCalls;
+const txm = api.ucscRowToModel(UCSC_ROW, 'chr7');
+ok(txm.gene === 'PLUSG' && txm.strand === 1, 'a UCSC row yields the symbol and strand');
+ok(txm.exons.length === 4 && txm.exons[0].start === 900 && txm.exons[0].end === 909,
+   'UCSC 0-based half-open blocks become our 1-based inclusive exons');
+ok(txm.exons[2].start === 2000 && txm.exons[2].end === 2009,
+   'and exon 3 of that transcript is exon 2 of ours, same coordinates');
+ok(ucscCalls === before, 'building a model from a row costs no request');
+
+/* c.25 on NM_777777.1 is c.15 on ours: one extra 10-bp coding exon upstream. */
+const vTx = api.parseHGVS('NM_777777.1:c.25T>G');
+const res = await api.resolveViaUcsc(vTx);
+ok(!res.error && !res.notInPanel, 'the foreign transcript resolves');
+ok(res.pos === 2004, `it maps to the same genomic base as PLUSG c.15 (got ${res.pos})`);
+ok(res.gene.gene === 'PLUSG', 'and lands on our own gene record');
+ok(res.amplicons.length === 1, 'the covering amplicon is found');
+ok(res.notes.some(n=>/NM_777777\.1/.test(n)), 'the panel says which transcript did the numbering');
+ok(res.notes.some(n=>/exon 3 of NM_777777\.1 is exon 2 of/.test(n)
+                  && /same coordinates, so the same amplicon/.test(n)),
+   'renumbered exon is matched by coordinates, so the same amplicon is offered');
+ok(res.exon && res.exon.n === 2, 'and the exon shown is ours, not the foreign rank');
+ok(res.warnings.some(w=>/numbering came from/.test(w)),
+   'a warning keeps the numbering difference visible');
+ok(res.notes.some(n=>/reference base T confirmed/.test(n)),
+   'the reference base is checked against our own amplicon sequence');
+
+/* A transcript of a gene outside the panel must not be renumbered. */
+const away = api.parseHGVS('NM_888888.1:c.25T>G');
+await api.showVariant('NM_888888.1:c.25T>G');
+ok(has('Resolve NM_888888.1 via UCSC'), 'an unknown accession offers the lookup');
+let threw = false;
+try{ await api.resolveViaUcsc(away); }catch(e){ threw = /UCSC does not know/.test(e.message); }
+ok(threw, 'and an accession UCSC cannot place raises a readable error');
 
 /* ---- routing: a gene symbol must never be read as a variant ---- */
 globalThis.location.hash = '';

@@ -80,6 +80,11 @@ pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
 .empty{color:var(--muted);text-align:center;padding:40px 10px}
 .note{font-size:12.5px;color:var(--muted);margin-top:28px;line-height:1.6}
 .table-scroll{overflow-x:auto}
+.hot{color:var(--warn)}
+td.hot,b.hot{font-weight:600}
+.pref{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.pref input{accent-color:var(--accent);width:15px;height:15px;margin:0;cursor:pointer}
+.pref:hover{color:var(--ink)}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:7px 14px;border-radius:7px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
 @media (max-width:600px){ td.seq{font-size:12.5px} .gene-head h2{font-size:22px} }
@@ -97,6 +102,12 @@ pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
     <input id="q" list="genelist" placeholder="Gene, or a variant — MTHFR · NM_000110.4:c.1129G&gt;A · POLG:p.Trp748Ser · chr15:89327201" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Gene symbol or HGVS variant">
     <datalist id="genelist"></datalist>
     <a class="btn" href="exon_primers.xlsx" download>Download all (Excel)</a>
+  </div>
+  <div class="search" style="margin-top:-6px">
+    <label class="pref" title="Re-reads the alternatives already published and puts a pair whose two primers are within 2 °C first. Nothing is redesigned.">
+      <input type="checkbox" id="prefMatched"> Prefer primers matched to within 2 °C (&Delta;Tm)
+    </label>
+    <span class="kv" id="prefCount"></span>
   </div>
 
   <div id="view"><div class="panel empty">Choose a gene to see its coding exons and primers.</div></div>
@@ -126,7 +137,16 @@ async function init(){
   const p = META.params;
   $('#note').innerHTML = `Primers designed with Primer3 following the ExonPrimer approach: primer 3′ ends ≥ ${p.min_dist} bp from the exon/intron boundary, within a ${p.primer_region}-bp window; PCR products ${p.product_min}–${p.product_max} bp; exons too long for one product (targets over ${p.max_target} bp) get several overlapping primer pairs (${p.overlap}-bp overlap)${p.combine?'; exons with short introns combined':''}. Tm ${p.tm_min}–${p.tm_max} °C (opt ${p.tm_opt}), length ${p.size_min}–${p.size_max} nt. Target = ${p.target==='coding'?'coding part of each exon':'whole exon'}. Transcript: MANE Select (else Ensembl canonical).<br>
   <b>Safeguards.</b> Common SNPs (dbSNP 155, MAF ≥ ${p.snp_maf}) and repeats (RepeatMasker) are masked before design. Tiers: <i>clean</i> = no SNP and no repeat under primers; <i>repeat-5p</i> = repeat only in the 5′ part of a primer; <i>snp-5p</i> = SNP present but never in the last ${p.snp_3prime} bases. Targets in segmental duplications are flagged. ${META.ispcr ? 'Every candidate pair was checked genome-wide by in-silico PCR (isPcr); specific pairs are preferred.' : 'Genome-wide in-silico PCR was <b>not</b> run for this build — use the UCSC link.'}
-  <b>OK</b> = clean tier, normal settings, no homology alert, no off-target product; <b>Check</b> = see the listed warnings.`
+  <b>OK</b> = clean tier, normal settings, no homology alert, no off-target product; <b>Check</b> = see the listed warnings.<br>
+  <b>Tm.</b> Primer3's nearest-neighbour Tm (SantaLucia 1998) under PCR conditions: ${p.salt_mono!=null?p.salt_mono:50}&nbsp;mM&nbsp;Na⁺,
+  ${p.salt_div!=null?p.salt_div:1.5}&nbsp;mM&nbsp;Mg²⁺, ${p.dntp!=null?p.dntp:0.6}&nbsp;mM&nbsp;dNTP, ${p.dna_conc!=null?p.dna_conc:50}&nbsp;nM primer.
+  Calculators that model Na⁺ alone read about 6&nbsp;°C lower for the same oligo, so compare conventions before
+  concluding two tools disagree. ΔTm is the difference between the two primers of a pair; the checkbox above
+  re-orders the already-published alternatives to put a pair within ${DTM_LIMIT}&nbsp;°C first, without redesigning anything.<br>
+  <b>Other transcripts.</b> A c. position numbered on a transcript this panel does not use cannot be mapped from the
+  published data. Paste it anyway and the page offers to fetch that transcript's exon structure from the UCSC API and
+  convert the position in your browser — on click only. Amplicons are keyed on the genomic position, so alternative
+  transcripts that share an exon share the amplicon.`
     + (META.errors && META.errors.length ? `<br>Genes not processed: ${META.errors.map(e=>esc(e.gene)).join(', ')}.` : '');
   route();
 }
@@ -144,7 +164,7 @@ async function route(){
   const [g, ex] = raw.split('/');
   if(!g){ return; }
   const gene = await loadGene(g);
-  if(!gene){ $('#view').innerHTML = `<div class="panel empty">“${esc(g)}” is not in the precomputed list.</div>`; return; }
+  if(!gene){ $('#view').innerHTML = notInPanel(g); wireLookup(null); return; }
   GENE = gene; $('#q').value = gene.gene;
   renderGene(gene, ex ? parseInt(ex,10) : null);
 }
@@ -185,8 +205,61 @@ function renderGene(gene, exNum){
       <div class="sub">Primer3 found no pair with these settings. ${esc(f.reason||'')}</div></div></div>`).join('');
   $('#view').innerHTML = head + (body || '<div class="panel empty">Select a coding exon.</div>');
   document.querySelectorAll('.ex.coding').forEach(b=>b.onclick=()=>{ location.hash = `${gene.gene}/${b.dataset.n}`; });
+  const wide = gene.amplicons.filter(a=>a.pairs.length && dTm(a.pairs[0])>DTM_LIMIT);
+  const fixable = wide.filter(a=>a.pairs.some(p=>dTm(p)<=DTM_LIMIT));
+  $('#prefCount').textContent = wide.length
+    ? `${gene.gene}: ${wide.length} of ${gene.amplicons.length} amplicons have ΔTm > ${DTM_LIMIT} °C at rank 1`
+      + `, ${fixable.length} with a matched alternative`
+    : `${gene.gene}: every amplicon is already within ${DTM_LIMIT} °C`;
   $('#copyGene').onclick = ()=>copy(geneTSV(gene), `${gene.gene} primers`);
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy(b.dataset.copy, b.dataset.what));
+}
+
+/* ---------- matched-pair preference (A2/A3) ------------------------------
+   dTm is derived from the published f_tm/r_tm, so both the display and the
+   re-ordering work on the data as built - no rebuild involved.
+
+   Primer3 ranked these pairs with PRIMER_PAIR_WT_DIFF_TM at its default of
+   0, so it never *preferred* a matched pair; it only rejected pairs beyond
+   PRIMER_PAIR_MAX_DIFF_TM. The preference below re-reads the alternatives
+   already published and puts a matched pair first. It is opt-in: rank 1 is
+   still Primer3's own choice, and it is better than the alternatives on the
+   criteria that are not Tm (SNPs, repeats, in-silico PCR specificity).  */
+
+const DTM_LIMIT = 2;                    // the delta asked for, in degrees C
+let PREF_MATCHED = false;
+try{ PREF_MATCHED = localStorage.getItem('prefMatchedTm') === '1'; }catch(e){}
+
+function dTm(p){ return Math.abs(p.f_tm - p.r_tm); }
+function dTmText(p){ return dTm(p).toFixed(1); }
+
+/* Genome-wide specificity as a rank, so a promotion can never trade it away:
+   the OK/Check badge and the in-silico PCR result were established for the
+   pair the build put first. 2 = specific, 1 = never checked, 0 = off-target
+   product or no product at all. */
+function ispcrRank(p){
+  const ip = p && p.ispcr;
+  if(!ip || !ip.checked) return 1;
+  if(ip.off_target && ip.off_target.length) return 0;
+  return ip.on_target ? 2 : 0;
+}
+
+/* Pairs in display order: Primer3's, unless the preference is on and a
+   published alternative is matched while rank 1 is not. A candidate must be
+   at least as specific as rank 1, so the amplicon's status stays truthful.
+   Stable, so the Primer3 order is kept inside each group. */
+function orderedPairs(a){
+  const ps = (a && a.pairs) || [];
+  if(!PREF_MATCHED || ps.length < 2 || dTm(ps[0]) <= DTM_LIMIT) return ps;
+  const floor = ispcrRank(ps[0]);
+  const good = ps.filter(p=>dTm(p) <= DTM_LIMIT && ispcrRank(p) >= floor);
+  return good.length ? good.concat(ps.filter(p=>!good.includes(p))) : ps;
+}
+function bestPair(a){ return orderedPairs(a)[0]; }
+/* True when the preference actually moved a different pair to the front. */
+function reordered(a){
+  const ps = (a && a.pairs) || [];
+  return ps.length > 1 && orderedPairs(a)[0] !== ps[0];
 }
 
 /* HGVS-RESOLVER-START */
@@ -269,27 +342,34 @@ function cdsToGenomic(gene, cpos){
    amplicon string runs from `end` down to `start`. */
 function refBaseAt(gene, pos){
   for(const a of gene.amplicons){
-    const b = a.pairs && a.pairs[0];
-    if(b && pos >= b.start && pos <= b.end){
-      const i = gene.strand===1 ? pos-b.start : b.end-pos;
-      return (b.amplicon[i]||'').toUpperCase();
+    // Any published pair will do: each carries its own span and sequence.
+    for(const b of (a.pairs||[])){
+      if(pos >= b.start && pos <= b.end){
+        const i = gene.strand===1 ? pos-b.start : b.end-pos;
+        return (b.amplicon[i]||'').toUpperCase();
+      }
     }
   }
   return null;
 }
 
-/* Amplicons whose PCR product spans a position - what you'd actually order. */
+/* Amplicons whose PCR product spans a position - what you'd actually order.
+   An amplicon counts when ANY of its published pairs spans the position, so
+   coverage does not change with the pair the page happens to show first. */
+function covers(a, lo, hi){
+  return (a.pairs||[]).some(b=>b.start<=hi && b.end>=lo);
+}
 function amplsCovering(gene, pos){
-  return gene.amplicons.filter(a=>{
-    const b = a.pairs && a.pairs[0];
-    return b && pos >= b.start && pos <= b.end;
-  });
+  return gene.amplicons.filter(a=>covers(a, pos, pos));
 }
 
-/* Resolve a parsed variant against one gene. */
-function resolveInGene(gene, v){
-  const out = {gene, warnings: [], notes: []};
-
+/* Map a parsed variant onto a transcript MODEL - anything carrying .exons,
+   .strand, .chrom and .gene. Our own published gene is one such model; so is
+   a foreign transcript fetched from UCSC, which is what lets the same
+   arithmetic serve a transcript this panel does not carry. Fills `out` with
+   pos / posEnd / exon / notes / warnings, or returns an error. */
+function mapVariant(model, v, out){
+  const gene = model;
   if(v.kind==='g'){
     if(v.chrom && v.chrom !== String(gene.chrom).toUpperCase())
       return {error:`Variant is on chr${v.chrom}, ${gene.gene} is on chr${gene.chrom}.`};
@@ -323,14 +403,24 @@ function resolveInGene(gene, v){
       if(h2) out.posEnd = v.offset2 ? h2.pos + (gene.strand===1?v.offset2:-v.offset2) : h2.pos;
     }
   }
+  return null;
+}
 
+/* Resolve a parsed variant against one gene of this panel. */
+function resolveInGene(gene, v){
+  const out = {gene, warnings: [], notes: []};
+  const err = mapVariant(gene, v, out);
+  if(err) return err;
+  return attachAmplicons(gene, v, out);
+}
+
+/* Genomic position -> the amplicons that sequence it, plus the base check. */
+function attachAmplicons(gene, v, out){
   out.amplicons = amplsCovering(gene, out.pos);
   if(out.posEnd!=null && out.posEnd!==out.pos){
     const lo = Math.min(out.pos,out.posEnd), hi = Math.max(out.pos,out.posEnd);
     out.span = [lo,hi];
-    out.amplicons = gene.amplicons.filter(a=>{
-      const b=a.pairs&&a.pairs[0]; return b && b.start<=hi && b.end>=lo;
-    });
+    out.amplicons = gene.amplicons.filter(a=>covers(a, lo, hi));
   }
 
   // Reference-allele check, when we have the base and the variant states one.
@@ -343,6 +433,135 @@ function resolveInGene(gene, v){
   return out;
 }
 
+
+/* ---------- a transcript this panel does not carry (A4/A5) ----------------
+   The published JSON holds only the MANE Select structure, so a c. position
+   numbered on another transcript cannot be mapped offline. UCSC's API serves
+   the exon structure of any RefSeq accession and sends
+   Access-Control-Allow-Origin: *, so the browser does the conversion itself
+   and this stays a static site with no server of ours.
+
+   Only ever on an explicit click: a static page must not call a third party
+   on every keystroke. The amplicon itself is keyed on the genomic position,
+   not on c. numbering, so once the position is known the transcript question
+   disappears - and alternative transcripts often share the very exon, in
+   which case the amplicon to order is exactly the same one.             */
+
+const UCSC_API = 'https://api.genome.ucsc.edu';
+const TX_TRACKS = ['ncbiRefSeqCurated', 'ncbiRefSeqSelect', 'ncbiRefSeq', 'knownGene'];
+const bareAcc = a => String(a||'').split('.')[0].toUpperCase();
+
+async function ucscJson(path){
+  const r = await fetch(UCSC_API + path);
+  if(!r.ok) throw new Error(`the UCSC API returned ${r.status}`);
+  const j = await r.json();
+  if(j.error) throw new Error(String(j.error));
+  return j;
+}
+
+/* UCSC rows are 0-based half-open; our exons are 1-based inclusive. */
+function ucscRowToModel(row, chrom){
+  const strand = row.strand === '-' ? -1 : 1;
+  const cdsLo = row.cdsStart + 1, cdsHi = row.cdsEnd;
+  const nums = v => String(v==null?'':v).split(',').filter(x=>x!=='').map(Number);
+  const starts = nums(row.exonStarts), ends = nums(row.exonEnds);
+  if(!starts.length || starts.length !== ends.length)
+    throw new Error(`${row.name} has no usable exon structure at UCSC.`);
+  const blocks = starts.map((st,i)=>({start: st+1, end: ends[i]}));
+  blocks.sort((a,b)=> strand===1 ? a.start-b.start : b.start-a.start);
+  const exons = blocks.map((e,i)=>{
+    const cs = Math.max(e.start, cdsLo), ce = Math.min(e.end, cdsHi);
+    const coding = cdsHi >= cdsLo && cs <= ce;
+    return {n:i+1, start:e.start, end:e.end, coding,
+            cds_start: coding?cs:null, cds_end: coding?ce:null, len: e.end-e.start+1};
+  });
+  if(!exons.some(e=>e.coding))
+    throw new Error(`${row.name} is not protein-coding, so it has no c. numbering.`);
+  return {gene: row.name2 || '', transcript: row.name,
+          chrom: String(chrom).replace(/^chr/,''), strand, exons};
+}
+
+/* Accession -> a transcript model, via two UCSC calls. */
+async function ucscTranscript(acc){
+  const db = META.ucsc_db;
+  const found = await ucscJson(`/search?search=${encodeURIComponent(acc)}&genome=${encodeURIComponent(db)}`);
+  let where = null;
+  for(const t of (found.positionMatches||[])){
+    for(const m of (t.matches||[])){
+      const text = `${m.posName||''} ${m.hgFindMatches||''}`.toUpperCase();
+      if(text.includes(bareAcc(acc)) && /^chr[\w.]+:\d+-\d+$/.test(m.position||'')){ where = m.position; break; }
+    }
+    if(where) break;
+  }
+  if(!where) throw new Error(`UCSC does not know ${acc} in ${db}.`);
+  const chrom = where.split(':')[0];
+  const [lo, hi] = where.split(':')[1].split('-').map(Number);
+  for(const track of TX_TRACKS){
+    let payload;
+    try{
+      payload = await ucscJson(`/getData/track?genome=${encodeURIComponent(db)};track=${track}`
+        + `;chrom=${encodeURIComponent(chrom)};start=${Math.max(0, lo-1)};end=${hi}`);
+    }catch(e){ continue; }
+    const raw = payload[track];
+    const rows = Array.isArray(raw) ? raw : ((raw && raw[chrom]) || []);
+    const row = rows.find(r=>bareAcc(r.name) === bareAcc(acc));
+    if(row) return ucscRowToModel(row, chrom);
+  }
+  throw new Error(`${acc} exists in ${db} but no RefSeq track carried its exon structure.`);
+}
+
+/* Do two exon structures place the same exon at the same coordinates? */
+function sameExon(a, b){
+  return a && b && a.start === b.start && a.end === b.end;
+}
+
+/* Full flow: foreign c. -> genomic -> our amplicon. */
+async function resolveViaUcsc(v){
+  const tx = await ucscTranscript(v.ref);
+  const symbol = tx.gene || '';
+  const entry = META.genes.find(g=>g.gene.toUpperCase() === symbol.toUpperCase());
+  if(!entry) return {notInPanel: symbol || v.ref};
+
+  const gene = await loadGene(entry.gene);
+  if(!gene) return {error: `${esc(entry.gene)} has no data in this build.`};
+
+  const out = {gene, warnings: [], notes: []};
+  const err = mapVariant(tx, v, out);          // numbering from the transcript given
+  if(err) return err;
+  if(String(tx.chrom) !== String(gene.chrom))
+    return {error: `${esc(v.ref)} is on chr${esc(tx.chrom)} but ${esc(gene.gene)} is on chr${esc(gene.chrom)} here.`};
+
+  const foreignExon = out.exon;
+  attachAmplicons(gene, v, out);               // amplicons and base check from ours
+
+  out.notes.unshift(`mapped through ${tx.transcript} at UCSC (${esc(META.ucsc_db)})`);
+  // Where the two transcripts agree on the exon, the amplicon is the same one.
+  const mine = foreignExon && gene.exons.find(e=>sameExon(e, foreignExon));
+  if(mine){
+    out.exon = mine;
+    out.notes.push(mine.n === foreignExon.n
+      ? `${tx.transcript} and ${gene.transcript} share this exon (exon ${mine.n} in both)`
+      : `exon ${foreignExon.n} of ${tx.transcript} is exon ${mine.n} of ${gene.transcript} - same coordinates, so the same amplicon`);
+  }else if(foreignExon){
+    out.exon = null;
+    out.warnings.push(`Exon ${foreignExon.n} of ${v.ref} (chr${tx.chrom}:${fmt(foreignExon.start)}-${fmt(foreignExon.end)}) `
+      + `has no exact counterpart in ${gene.transcript}. The amplicons below are the ones covering the position; check the boundaries.`);
+  }
+  out.warnings.push(`c. numbering came from ${v.ref}, not from ${gene.transcript} (this panel's transcript). `
+    + `The position and the amplicon are what matter for ordering, but any c. coordinate shown elsewhere on this page is numbered on ${gene.transcript}.`);
+  out.ucsc = tx;
+  return out;
+}
+
+/* Offer the lookup rather than doing it unasked. */
+function lookupOffer(v, acc){
+  return `<div class="panel empty">
+    <b>${esc(acc)}</b> is not the transcript this panel uses, so its c. numbering cannot be mapped from the published data.<br>
+    Its exon structure can be fetched from the UCSC API and the position converted here, in your browser.
+    <div style="margin-top:14px"><button class="btn" id="doLookup" data-acc="${esc(acc)}">Resolve ${esc(acc)} via UCSC</button></div>
+    <div class="legend" style="margin-top:12px">One request to api.genome.ucsc.edu. Nothing is sent anywhere until you click.</div>
+  </div>`;
+}
 
 /* HGVS-RESOLVER-END */
 
@@ -364,7 +583,16 @@ function geneEntryFor(v){
       return {hit:tx};
     }
     if(/^(?:chr)?[0-9XYMxym]+$/.test(v.ref) || /^NC_0000/i.test(v.ref)){ /* a chromosome, handled below */ }
-    else return {error:`“${esc(v.ref)}” is not a gene, transcript or RefSeq in this panel. A different transcript may use different c. numbering, so no lookup was attempted.`};
+    else if(looksLikeAccession(v.ref) && v.kind!=='g'){
+      // A transcript we do not carry: its numbering can be fetched (A5).
+      return {lookup: v.ref};
+    }
+    else {
+      const near = nearestSymbols(v.ref);
+      return {error:`Check the spelling &mdash; otherwise <b>${esc(v.ref)}</b> is not a gene, transcript or RefSeq in our database.`
+        + ` A different transcript may use different c. numbering, so no lookup was attempted.`
+        + (near.length?`<br>Did you mean ${near.map(x=>`<a href="#${encodeURIComponent(x)}">${esc(x)}</a>`).join(' · ')}?`:'')};
+    }
   }
   if(v.kind==='g'){
     let chrom = v.chrom;
@@ -388,16 +616,18 @@ function variantPanel(v, res, entry){
   const notes = [].concat(entry.warn?[entry.warn]:[], res.warnings||[]);
   const amps = res.amplicons||[];
   const rows = amps.map(a=>{
-    const b=a.pairs&&a.pairs[0];
+    const b=bestPair(a);
     if(!b) return '';
     const cls = a.status==='OK'?'ok':a.status==='CHECK'?'check':'fail';
     return `<tr><td><a href="#${encodeURIComponent(g.gene)}/${a.exons[0]}">${esc(g.gene)}_E${esc(a.label)}</a> <span class="pill ${cls}">${esc(a.status)}</span></td>
       <td class="seq">${esc(b.f_seq)}</td><td class="seq">${esc(b.r_seq)}</td><td>${b.product} bp</td>
+      <td class="${dTm(b)>DTM_LIMIT?'hot':''}">${dTmText(b)}</td>
       <td>${fmt(b.start)}–${fmt(b.end)}</td></tr>`;
   }).join('');
   return `<div class="panel">
     <div class="gene-head"><h2>${esc(v.desc)}</h2>
       <span class="kv">${esc(g.gene)} · <b>${esc(g.transcript)}</b></span>
+      ${res.ucsc?`<span class="kv">numbered on <b>${esc(res.ucsc.transcript)}</b></span>`:''}
       <span class="kv">maps to <b>${esc(loc)}</b></span>
       ${res.exon?`<span class="kv">exon <b>${res.exon.n}</b></span>`:''}
       ${entry.assumed?'<span class="badge">gene assumed from current view</span>':''}
@@ -405,16 +635,68 @@ function variantPanel(v, res, entry){
     ${res.notes&&res.notes.length?`<div class="legend">${res.notes.map(esc).join(' · ')}</div>`:''}
     ${notes.length?`<ul class="warns">${notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`:''}
     ${amps.length
-      ? `<div class="table-scroll"><table><thead><tr><th>Amplicon</th><th>Forward</th><th>Reverse</th><th>Product</th><th>Position</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ? `<div class="table-scroll"><table><thead><tr><th>Amplicon</th><th>Forward</th><th>Reverse</th><th>Product</th><th>ΔTm</th><th>Position</th></tr></thead><tbody>${rows}</tbody></table></div>
          <div class="legend">Use this pair to amplify and sequence the variant. Click the amplicon for the full record.</div>`
       : `<div class="panel empty" style="margin:0">No amplicon in this panel covers that position.${res.exon?` It maps near exon ${res.exon.n}, but primers only reach about ${META.params.primer_region} bp into the flanking intron.`:''}</div>`}
   </div>`;
 }
 
+/* ---------- "not in the panel" vs "not readable" ------------------------
+   A real gene symbol that this build simply does not cover must not be
+   reported as unreadable HGVS, so symbol- and accession-shaped queries get
+   their own message, with the closest symbols we do carry.            */
+
+function looksLikeSymbol(s){
+  return /^[A-Za-z][A-Za-z0-9-]{0,14}$/.test(s) && /[A-Za-z]{2}/.test(s);
+}
+function looksLikeAccession(s){
+  return /^(?:N[MGCR]|X[MR]|ENS[TG])[0-9_.]+$/i.test(s);
+}
+function editDistance(a,b){
+  const m=a.length, n=b.length;
+  if(Math.abs(m-n)>2) return 3;
+  let prev=Array.from({length:n+1},(_,j)=>j), cur=new Array(n+1);
+  for(let i=1;i<=m;i++){
+    cur[0]=i;
+    for(let j=1;j<=n;j++)
+      cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    [prev,cur]=[cur,prev];
+  }
+  return prev[n];
+}
+/* Closest symbols in the panel: one typo away first, then same-prefix. */
+function nearestSymbols(q, limit=6){
+  const u = q.toUpperCase(), syms = META ? META.genes.map(g=>g.gene) : [];
+  const close = [], prefix = [];
+  for(const s of syms){
+    const d = editDistance(u, s.toUpperCase());
+    if(d<=2) close.push([d,s]);
+    else if(u.length>=3 && s.toUpperCase().startsWith(u.slice(0,Math.min(4,u.length)))) prefix.push(s);
+  }
+  close.sort((a,b)=>a[0]-b[0] || a[1].localeCompare(b[1]));
+  return close.map(c=>c[1]).concat(prefix.sort()).slice(0, limit);
+}
+function notInPanel(text){
+  const near = nearestSymbols(text);
+  const links = near.map(s=>`<a href="#${encodeURIComponent(s)}">${esc(s)}</a>`).join(' · ');
+  return `<div class="panel empty">Check the spelling &mdash; otherwise <b>${esc(text)}</b> is not in our database.<br>
+    This panel covers ${fmt(META.genes.length)} genes; ${esc(text)} is not one of them.
+    ${near.length?`<br>Did you mean ${links}?`:''}
+    ${looksLikeAccession(text)?`<div style="margin-top:14px"><button class="btn" id="doLookup" data-acc="${esc(text)}">Ask UCSC which gene ${esc(text)} is</button></div>`:''}</div>`;
+}
+
 async function showVariant(text){
   const v = parseHGVS(text);
-  if(!v){ $('#view').innerHTML = `<div class="panel empty">Could not read “${esc(text)}” as a gene or an HGVS variant.<br>Try <code>POLG:c.2243G>C</code>, <code>NM_000110.4:c.1129+5G>A</code>, <code>POLG:p.Trp748Ser</code> or <code>chr15:89327201</code>.</div>`; return; }
+  if(!v){
+    // Symbol- or accession-shaped input is a gene we do not carry, not bad HGVS.
+    $('#view').innerHTML = (looksLikeSymbol(text.trim()) || looksLikeAccession(text.trim()))
+      ? notInPanel(text.trim())
+      : `<div class="panel empty">Could not read “${esc(text)}” as a gene or an HGVS variant.<br>Try <code>POLG:c.2243G>C</code>, <code>NM_000110.4:c.1129+5G>A</code>, <code>POLG:p.Trp748Ser</code> or <code>chr15:89327201</code>.</div>`;
+    wireLookup(null);
+    return;
+  }
   const entry = geneEntryFor(v);
+  if(entry.lookup){ $('#view').innerHTML = lookupOffer(v, entry.lookup); wireLookup(v); return; }
   if(entry.error){ $('#view').innerHTML = `<div class="panel empty">${entry.error}</div>`; return; }
   const gene = await loadGene(entry.hit.gene);
   if(!gene){ $('#view').innerHTML = `<div class="panel empty">${esc(entry.hit.gene)} has no data in this build.</div>`; return; }
@@ -422,7 +704,41 @@ async function showVariant(text){
   const res = resolveInGene(gene, v);
   if(res.error){ $('#view').innerHTML = `<div class="panel empty">${esc(res.error)}</div>`; return; }
   $('#view').innerHTML = variantPanel(v, res, entry);
+  wireButtons();
+}
+
+/* The UCSC lookup button, wherever it was rendered. */
+function wireLookup(v){
+  const btn = $('#doLookup');
+  if(!btn) return;
+  btn.onclick = async ()=>{
+    const acc = btn.dataset.acc;
+    btn.disabled = true; btn.textContent = `Asking UCSC about ${acc}…`;
+    try{
+      // No variant to place: just identify the gene and show it.
+      if(!v || v.kind==='symbol'){
+        const tx = await ucscTranscript(acc);
+        const hit = tx.gene && META.genes.find(g=>g.gene.toUpperCase()===tx.gene.toUpperCase());
+        if(hit){ toast(`${acc} is ${tx.gene}`); location.hash = hit.gene; return; }
+        $('#view').innerHTML = notInPanel(tx.gene || acc) +
+          `<div class="panel empty" style="margin-top:0">UCSC says ${esc(acc)} is <b>${esc(tx.gene||'unknown')}</b>.</div>`;
+        wireLookup(null); return;
+      }
+      const res = await resolveViaUcsc(v);
+      if(res.notInPanel){ $('#view').innerHTML = notInPanel(res.notInPanel); wireLookup(null); return; }
+      if(res.error){ $('#view').innerHTML = `<div class="panel empty">${res.error}</div>`; return; }
+      GENE = res.gene;
+      $('#view').innerHTML = variantPanel(v, res, {warn:null});
+      wireButtons();
+    }catch(e){
+      $('#view').innerHTML = `<div class="panel empty">Could not resolve ${esc(acc)}: ${esc(e.message||e)}<br>
+        <span class="legend">The conversion needs api.genome.ucsc.edu. Search by gene, or paste the genomic position instead.</span></div>`;
+    }
+  };
+}
+function wireButtons(){
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy(b.dataset.copy, b.dataset.what));
+  wireLookup(null);
 }
 
 function ucscUrl(f,r){
@@ -432,14 +748,19 @@ function ucscUrl(f,r){
 function ucscBrowser(chrom,s,e){ return `https://genome.ucsc.edu/cgi-bin/hgTracks?db=${META.ucsc_db}&position=chr${chrom}:${s}-${e}`; }
 
 function renderAmp(gene, a){
-  const b = a.pairs[0], name = `${gene.gene}_E${a.label}`;
+  const ps = orderedPairs(a), b = ps[0], name = `${gene.gene}_E${a.label}`;
   const span = a.exons.length>1 ? `Exons ${a.exons[0]}–${a.exons[a.exons.length-1]} combined` : `Exon ${a.exons[0]}`;
   const frag = a.fragment ? ` · fragment ${a.fragment}` : '';
-  const alts = a.pairs.slice(1).map(p=>`<tr><td>${p.rank}</td><td class="seq">${p.f_seq}${snpLine(p.f_snps,p.f_repeat)}</td><td class="seq">${p.r_seq}${snpLine(p.r_snps,p.r_repeat)}</td><td>${p.f_tm}/${p.r_tm}</td><td>${p.product}</td><td>${esc(ispcrText(p.ispcr))}</td></tr>`).join('');
+  const alts = ps.slice(1).map(p=>`<tr><td>${p.rank}</td><td class="seq">${p.f_seq}${snpLine(p.f_snps,p.f_repeat)}</td><td class="seq">${p.r_seq}${snpLine(p.r_snps,p.r_repeat)}</td><td>${p.f_tm}/${p.r_tm}</td><td class="${dTm(p)>DTM_LIMIT?'hot':''}">${dTmText(p)}</td><td>${p.product}</td><td>${esc(ispcrText(p.ispcr))}</td></tr>`).join('');
+  const swapped = reordered(a)
+    ? `<li>Showing Primer3 rank ${b.rank} instead of rank 1: its primers are matched to within ${DTM_LIMIT} °C
+        (ΔTm ${dTmText(b)} vs ${dTmText(a.pairs[0])}). Rank 1 is still listed under the alternatives, and it
+        ranked first on the non-Tm criteria — compare the SNP and in-silico PCR columns before ordering.</li>`
+    : '';
   return `<div class="panel amp">
     <h3>${esc(name)}${a.status==='OK'?'<span class="pill ok">OK</span>':'<span class="pill check">Check</span>'}</h3>
     <div class="sub">${span}${frag} · target ${fmt(a.target_len)} bp (${esc(META.params.target==='coding'?'coding part':'whole exon')}) · tier <i>${esc(a.tier)}</i>${a.relaxed?' (relaxed)':''}</div>
-    ${a.warnings.length?`<ul class="warns">${a.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}
+    ${a.warnings.length||swapped?`<ul class="warns">${swapped}${a.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}
     <div class="table-scroll"><table>
       <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th>Tm °C</th><th>GC %</th><th></th></tr>
       <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td><td>${b.f_gc}</td>
@@ -449,6 +770,7 @@ function renderAmp(gene, a){
     </table></div>
     <div class="facts">
       <div>Product<b>${fmt(b.product)} bp</b></div>
+      <div>ΔTm F–R<b class="${dTm(b)>DTM_LIMIT?'hot':''}">${dTmText(b)} °C</b></div>
       <div>F 3′ → exon<b>${b.f_dist} bp</b></div>
       <div>Exon → R 3′<b>${b.r_dist} bp</b></div>
       <div>In-silico PCR<b>${esc(ispcrText(b.ispcr))}</b></div>
@@ -461,8 +783,8 @@ function renderAmp(gene, a){
       <button class="btn" data-copy="${b.amplicon}" data-what="Amplicon">Copy amplicon</button>
     </div>
     <details><summary>Amplicon sequence (exon in colour, primers highlighted, SNPs boxed)</summary>${ampView(b)}</details>
-    ${alts?`<details><summary>${a.pairs.length-1} alternative pair${a.pairs.length>2?'s':''}</summary>
-      <div class="table-scroll"><table class="alt"><tr><th>#</th><th>Forward</th><th>Reverse</th><th>Tm F/R</th><th>Product</th><th>In-silico PCR</th></tr>${alts}</table></div></details>`:''}
+    ${alts?`<details><summary>${ps.length-1} alternative pair${ps.length>2?'s':''}</summary>
+      <div class="table-scroll"><table class="alt"><tr><th>#</th><th>Forward</th><th>Reverse</th><th>Tm F/R</th><th>ΔTm</th><th>Product</th><th>In-silico PCR</th></tr>${alts}</table></div></details>`:''}
   </div>`;
 }
 
@@ -495,9 +817,11 @@ function ispcrText(ip){
   return ip.on_target ? 'specific' : 'no product';
 }
 function geneTSV(gene){
-  const rows = [['Name','Sequence','Exon','Product_bp','Tm','Amplicon']];
-  gene.amplicons.forEach(a=>{ const b=a.pairs[0], n=`${gene.gene}_E${a.label}`, loc=`chr${b.chrom}:${b.start}-${b.end}`;
-    rows.push([n+'F', b.f_seq, a.label, b.product, b.f_tm, loc]); rows.push([n+'R', b.r_seq, a.label, b.product, b.r_tm, loc]); });
+  const rows = [['Name','Sequence','Exon','Product_bp','Tm','dTm_pair','Amplicon']];
+  gene.amplicons.forEach(a=>{ const b=bestPair(a); if(!b) return;
+    const n=`${gene.gene}_E${a.label}`, loc=`chr${b.chrom}:${b.start}-${b.end}`, d=dTmText(b);
+    rows.push([n+'F', b.f_seq, a.label, b.product, b.f_tm, d, loc]);
+    rows.push([n+'R', b.r_seq, a.label, b.product, b.r_tm, d, loc]); });
   return rows.map(r=>r.join('\t')).join('\n');
 }
 
@@ -514,6 +838,12 @@ $('#home').addEventListener('click', e=>{
   GENE = null; $('#q').value = '';
   history.pushState('', '', location.pathname + location.search);
   $('#view').innerHTML = '<div class="panel empty">Choose a gene to see its coding exons and primers.</div>';
+});
+$('#prefMatched').checked = PREF_MATCHED;
+$('#prefMatched').addEventListener('change', e=>{
+  PREF_MATCHED = e.target.checked;
+  try{ localStorage.setItem('prefMatchedTm', PREF_MATCHED ? '1' : '0'); }catch(err){}
+  route();                                   // re-render whatever is on screen
 });
 $('#q').addEventListener('change', e=>submitQuery(e.target.value));
 $('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') submitQuery(e.target.value); });

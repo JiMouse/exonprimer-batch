@@ -129,9 +129,10 @@ structure, strand and amplicon spans, so no server or API is involved.
 
 Three things it deliberately does **not** guess:
 
-- **A different transcript.** The panel is built on MANE Select. A matching accession with a
-  different version is used but flagged; a different accession is refused rather than
-  renumbered, because `c.` coordinates would not agree.
+- **A different transcript.** The panel is built on MANE Select, so `c.` coordinates from
+  another transcript are never silently renumbered against ours. A matching accession with a
+  different version is used but flagged; a *different* accession is offered for conversion
+  instead (below).
 - **Deep intronic variants.** Primers reach about `--primer-region` bp into the flanks, so a
   variant further in is reported as covered by no amplicon, never rounded to the nearest exon.
 - **UTR variants.** `c.-45` and `c.*120` lie outside the coding target and are refused.
@@ -139,6 +140,41 @@ Three things it deliberately does **not** guess:
 When the variant states a reference allele it is checked against the amplicon sequence, which
 catches a wrong genome build or a typo. Primers are matched on the **PCR product** span, not the
 exon, so an intronic variant inside the product is correctly reported as sequenceable.
+
+### A transcript the panel does not use
+
+`NM_001316329.2:c.500A>G` is numbered on a *PRKCG* transcript that is not MANE Select, so the
+published data cannot map it. The page says so and offers one button. On click it fetches that
+accession's exon structure from the **UCSC API** (`api.genome.ucsc.edu`, which sends
+`Access-Control-Allow-Origin: *`), converts the position in the browser with the same arithmetic
+used for our own transcripts, and shows the amplicon. Still no server of ours, and nothing is
+requested until you click.
+
+Because an amplicon is keyed on the **genomic position**, the transcript question disappears once
+the position is known — and alternative transcripts very often share the exon outright. For
+*PRKCG*, `NM_001316329.2` and the MANE `NM_002739.5` have **17 of 19 exons at identical
+coordinates**, so the pair to order is literally the same one. The page says which transcript did
+the numbering, whether the exon is shared, and warns when it is not. If UCSC reports a gene the
+panel does not cover (`NM_006088.6` → *TUBB4B*), you get that message instead of a
+mis-mapped exon.
+
+A gene or accession that is simply absent says so — *check the spelling, otherwise it is not in
+our database* — with the closest symbols in the panel as links, rather than claiming the input
+was unreadable HGVS.
+
+### Primer pairs matched on Tm
+
+The reported Tm is Primer3's nearest-neighbour value (SantaLucia 1998) under **PCR conditions**:
+50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP, 50 nM primer. A calculator that models Na⁺ alone reads
+about **6 °C lower for the same oligo** — so check which convention a tool uses before concluding
+that two tools disagree. The nearest-neighbour ΔTm between the two primers of a pair is stable
+across conventions; simple GC rules are not.
+
+Every amplicon view shows **ΔTm** for the pair, and the checkbox above the search box re-orders
+the alternatives already published so that a pair matched to within 2 °C comes first. It changes
+nothing in the data — Primer3's own rank 1 stays listed, and a pair is never promoted if it would
+trade away genome-wide specificity. On the current build, 10 % of best pairs exceed 2 °C and
+two thirds of those already have a matched alternative.
 
 ## Publish the website on GitHub
 
@@ -205,10 +241,14 @@ strand, reference-base read-back, and that UTR, out-of-range, wrong-chromosome a
 lookups are refused rather than answered wrongly.
 
 `node tests/test_page.mjs` tests the page around it: the whole `<script>` runs against a stubbed
-DOM and a stubbed `fetch` serving synthetic genes. It covers which gene a variant resolves to —
-by symbol, Ensembl transcript, RefSeq, or coordinate — the transcript-safety rules (a version
-difference warns, a different accession is refused), what the result panel renders, and that a
-gene symbol is never routed as a variant.
+DOM and a stubbed `fetch` serving synthetic genes **and a stubbed UCSC API**. It covers which gene
+a variant resolves to — by symbol, Ensembl transcript, RefSeq, or coordinate — the
+transcript-safety rules (a version difference warns, a different accession is offered for
+conversion and never renumbered), the UCSC route end to end (0-based half-open rows become
+1-based exons, a foreign `c.` lands on the right genomic base, a shared exon is recognised, a
+gene outside the panel is reported as such), ΔTm display and re-ordering including the guard
+that never promotes a pair with an off-target product, and that a gene symbol is never routed as
+a variant.
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
 Ensembl/UCSC/isPcr responses. It checks primer coordinates against the genome, minimum distance,
