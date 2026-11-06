@@ -73,9 +73,9 @@ jobs:
       data_key: ${{ steps.key.outputs.data_key }}
       have_data: ${{ steps.key.outputs.have_data }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -129,7 +129,7 @@ jobs:
           echo "count=$(ls chunks | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
           echo "$(wc -l < all_genes.txt) genes in $(ls chunks | wc -l) chunks"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.key.outputs.have_data != 'true'
         with:
           name: chunks
@@ -146,16 +146,16 @@ jobs:
       matrix:
         chunk: ${{ fromJSON(needs.plan.outputs.chunks) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
 
       - run: pip install -r requirements.txt
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: chunks
           path: chunks
@@ -167,7 +167,7 @@ jobs:
       - name: Restore isPcr and genome
         if: env.RUN_ISPCR == 'true'
         id: genome
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: tools
           key: ispcr-${{ env.UCSC_DB }}-v1
@@ -190,7 +190,7 @@ jobs:
       # Each chunk keeps its own web cache, restored from any earlier run of
       # the same chunk so only genuinely new genes hit Ensembl and UCSC.
       - name: Restore web cache (Ensembl / UCSC responses)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache
           key: web-${{ env.ASSEMBLY }}-${{ matrix.chunk }}-${{ hashFiles(format('chunks/chunk_{0}', matrix.chunk)) }}
@@ -211,7 +211,7 @@ jobs:
             --json-dir "parts/${{ matrix.chunk }}/data" \
             $ISPCR_ARGS ${{ inputs.extra_args }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: part-${{ matrix.chunk }}
           path: parts/${{ matrix.chunk }}
@@ -227,9 +227,9 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -259,7 +259,7 @@ jobs:
           echo "restored $(ls site/data/genes | wc -l) gene files without designing anything"
 
       # ---- data change: merge the chunks and publish the result ----
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: needs.plan.outputs.have_data != 'true'
         with:
           pattern: part-*
@@ -300,11 +300,11 @@ jobs:
             --jq '.assets | sort_by(.createdAt) | reverse | .[3:] | .[].name' \
             | while read -r old; do [ -n "$old" ] && gh release delete-asset "$DATA_TAG" "$old" -y; done
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: exon_primers
           path: site/exon_primers.xlsx
@@ -365,4 +365,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
