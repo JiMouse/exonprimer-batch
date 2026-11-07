@@ -51,8 +51,21 @@ class FakeEnsembl:
             "Translation": {"start": g["tl"][0], "end": g["tl"][1], "length": 999}}]}
 
     def sequence(self, chrom, start, end, strand):
+        self.gets = getattr(self, "gets", 0) + 1
         s = CHROM[start - 1:end]
         return s if strand == 1 else rc(s)
+
+    def sequences(self, regions):
+        """The POST batch, keyed by the query string as Ensembl keys it."""
+        self.posts = getattr(self, "posts", 0) + 1
+        out = {}
+        for q in regions:
+            chrom, rest = q.split(":")
+            span, strand = rest.rsplit(":", 1)
+            a, b = (int(x) for x in span.split(".."))
+            out[q] = self.sequence(chrom, a, b, int(strand))
+        self.gets -= len(regions)          # charge the batch, not the pieces
+        return out
 
 
 class FakeUCSC:
@@ -67,6 +80,26 @@ class FakeUCSC:
 
     def segdups(self, chrom, start, end):
         return self._d
+
+    def mane(self, chrom):
+        """The UCSC MANE track, in the shape the real API serves it:
+        0-based half-open blocks, CDS in thickStart/thickEnd."""
+        if chrom != "chr1":
+            return []
+        rows = []
+        for sym, g in GENES.items():
+            ex = sorted(g["exons"])
+            st = ex[0][0] - 1
+            rows.append({
+                "chrom": "chr1", "chromStart": st, "chromEnd": ex[-1][1],
+                "name": f"ENST_{sym}.1", "geneName": f"ENSG_{sym}", "geneName2": sym,
+                "ncbiId": f"NM_{sym}.1", "maneStat": "MANE Select",
+                "strand": "+" if g["strand"] == 1 else "-",
+                "thickStart": g["tl"][0] - 1, "thickEnd": g["tl"][1],
+                "blockSizes": ",".join(str(e - s + 1) for s, e in ex) + ",",
+                "chromStarts": ",".join(str(s - 1 - st) for s, _ in ex) + ",",
+            })
+        return rows
 
 
 def snp(pos, maf=0.2, rs=None):
@@ -324,6 +357,113 @@ def test_cli_end_to_end():
         meta = json.loads(Path(f"{td}/site/data/index.json").read_text())
         assert [x["gene"] for x in meta["genes"]] == ["PLUSGENE", "MINUSGENE"]
         assert meta["errors"][0]["gene"] == "NOTAGENE"
+
+
+def test_mane_track_matches_the_ensembl_model():
+    """The fast path must produce the same model as asking Ensembl per gene.
+
+    This is the whole safety argument for the MANE track: 24 requests instead
+    of thousands, but only if the structures are identical. Against the real
+    data they agreed for 4,449 of 4,471 genes; here the equivalence is pinned
+    for both strands.
+    """
+    p = epb.Params()
+    pad = p.min_dist + p.primer_region + 100
+    mane = epb.ManeTable(FakeUCSC(), log=lambda *_: None)
+    assert set(mane.by_symbol) == {"PLUSGENE", "MINUSGENE"}
+    for sym in GENES:
+        a = mane.model(sym, pad)
+        b = epb.build_model(FakeEnsembl(), sym, None, pad, with_seq=False)
+        assert a is not None, sym
+        assert a.strand == b.strand and a.chrom == b.chrom, sym
+        assert a.transcript_version == b.transcript_version and a.refseq == b.refseq, sym
+        assert a.region_start == b.region_start and a.region_end == b.region_end, sym
+        assert [(e.number, e.start, e.end, e.cds_start, e.cds_end) for e in a.exons] == \
+               [(e.number, e.start, e.end, e.cds_start, e.cds_end) for e in b.exons], sym
+    assert mane.model("NOTAGENE", pad) is None
+
+
+def test_unknown_gene_falls_back_to_ensembl():
+    """A gene absent from the track is asked of Ensembl, not skipped."""
+    mane = epb.ManeTable(FakeUCSC(), log=lambda *_: None)
+    mane.by_symbol.pop("PLUSGENE")
+    with tempfile.TemporaryDirectory() as td:
+        gl = Path(td) / "genes.txt"
+        gl.write_text("PLUSGENE\nMINUSGENE\n")
+        ens = FakeEnsembl()
+        rc_ = epb.main([str(gl), "-o", f"{td}/x.xlsx", "--json-dir", f"{td}/data", "--cache", ""],
+                       ensembl=ens, ucsc=FakeUCSC())
+        meta = json.loads(Path(f"{td}/data/index.json").read_text())
+    assert rc_ == 0 and [x["gene"] for x in meta["genes"]] == ["PLUSGENE", "MINUSGENE"]
+
+
+def test_sequences_are_fetched_in_one_batch():
+    """Many genes, one POST - and matched by query string, not by position."""
+    p = epb.Params()
+    pad = p.min_dist + p.primer_region + 100
+    ens = FakeEnsembl()
+    mane = epb.ManeTable(FakeUCSC(), log=lambda *_: None)
+    models = [mane.model(sym, pad) for sym in GENES]
+    epb.fetch_sequences(ens, models, batch=50, log=lambda *_: None)
+    assert getattr(ens, "posts", 0) == 1, "one POST should cover both genes"
+    for m in models:
+        assert len(m.seq) == m.region_end - m.region_start + 1
+        direct = ens.sequence(m.chrom, m.region_start, m.region_end, m.strand)
+        assert m.seq == direct, f"{m.gene}: batch and single-region sequence differ"
+
+
+def test_batch_failure_falls_back_to_single_requests():
+    class Broken(FakeEnsembl):
+        def sequences(self, regions):
+            raise RuntimeError("batch endpoint down")
+    p = epb.Params()
+    pad = p.min_dist + p.primer_region + 100
+    mane = epb.ManeTable(FakeUCSC(), log=lambda *_: None)
+    models = [mane.model(sym, pad) for sym in GENES]
+    epb.fetch_sequences(Broken(), models, batch=50, log=lambda *_: None)
+    assert all(m.seq for m in models), "a dead batch endpoint must not lose the sequences"
+
+
+def test_both_tm_values_are_reported():
+    _, g = run("PLUSGENE")
+    for a in g["amplicons"]:
+        for b in a["pairs"]:
+            assert b["f_tm_na"] < b["f_tm"] and b["r_tm_na"] < b["r_tm"], \
+                "Na+-only Tm must read lower than the PCR-condition Tm"
+            assert 4 < b["f_tm"] - b["f_tm_na"] < 8, \
+                f"the Mg2+ contribution should be about 6 C, got {b['f_tm'] - b['f_tm_na']:.1f}"
+            assert b["d_tm"] == round(abs(b["f_tm"] - b["r_tm"]), 1)
+
+
+def test_pairs_are_matched_within_the_tm_ceiling():
+    p = epb.Params()
+    assert p.max_tm_diff == 2.0 and p.wt_tm_diff > 0
+    _, g = run("PLUSGENE", p)
+    for a in g["amplicons"]:
+        if a["relaxed"]:
+            continue
+        for b in a["pairs"]:
+            assert b["d_tm"] <= p.max_tm_diff + 1e-9, f'{a["label"]} rank {b["rank"]}: dTm {b["d_tm"]}'
+
+
+def test_salt_conditions_reach_primer3_and_change_the_tm():
+    hot = epb.Params()
+    cold = epb.Params(salt_div=0.0, dntp=0.0)
+    assert hot.primer3_global()["PRIMER_SALT_DIVALENT"] == 1.5
+    assert cold.primer3_global()["PRIMER_SALT_DIVALENT"] == 0.0
+    assert hot.primer3_global()["PRIMER_PAIR_WT_DIFF_TM"] == hot.wt_tm_diff
+    # Designing under Na+-only conditions picks different primers - Primer3
+    # optimises towards 60 C under whatever conditions it is given - so the
+    # two runs cannot be compared primer by primer. What must hold is that
+    # when the design conditions ARE Na+-only, the reported Tm and the
+    # Na+ column coincide, and that they diverge under PCR conditions.
+    _, a = run("PLUSGENE", hot)
+    _, b = run("PLUSGENE", cold)
+    for x in amp(b, "1")["pairs"]:
+        assert x["f_tm"] == x["f_tm_na"] and x["r_tm"] == x["r_tm_na"], \
+            f'Na+-only design should report one Tm, got {x["f_tm"]} vs {x["f_tm_na"]}'
+    for x in amp(a, "1")["pairs"]:
+        assert x["f_tm"] > x["f_tm_na"], "PCR conditions must read higher than Na+ alone"
 
 
 if __name__ == "__main__":

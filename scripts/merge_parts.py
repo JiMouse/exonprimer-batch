@@ -31,7 +31,7 @@ STATUS_FILL = {"OK": PatternFill("solid", start_color="D5EFD9"),
                "CHECK": PatternFill("solid", start_color="FDEBC8"),
                "FAIL": PatternFill("solid", start_color="F7D3D0")}
 # Sequences read better in a monospaced font; column indices are per sheet.
-SEQ_COLS = {"Primers": {7, 8}, "Alternatives": {3, 4}, "Amplicons": {4}}
+SEQ_COLS = {"Primers": {8, 14}, "Alternatives": {4, 7}, "Amplicons": {4}}
 
 
 def gene_bounds(part: Path, name: str) -> tuple[int, int] | None:

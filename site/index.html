@@ -81,6 +81,7 @@ pre.amplicon .pr{background:var(--rev);color:var(--rev-ink)}
 .note{font-size:12.5px;color:var(--muted);margin-top:28px;line-height:1.6}
 .table-scroll{overflow-x:auto}
 .hot{color:var(--warn)}
+td.muted{color:var(--muted)}
 td.hot,b.hot{font-weight:600}
 .pref{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
 .pref input{accent-color:var(--accent);width:15px;height:15px;margin:0;cursor:pointer}
@@ -230,7 +231,7 @@ const DTM_LIMIT = 2;                    // the delta asked for, in degrees C
 let PREF_MATCHED = false;
 try{ PREF_MATCHED = localStorage.getItem('prefMatchedTm') === '1'; }catch(e){}
 
-function dTm(p){ return Math.abs(p.f_tm - p.r_tm); }
+function dTm(p){ return p.d_tm!=null ? p.d_tm : Math.abs(p.f_tm - p.r_tm); }
 function dTmText(p){ return dTm(p).toFixed(1); }
 
 /* Genome-wide specificity as a rank, so a promotion can never trade it away:
@@ -752,6 +753,7 @@ function renderAmp(gene, a){
   const span = a.exons.length>1 ? `Exons ${a.exons[0]}–${a.exons[a.exons.length-1]} combined` : `Exon ${a.exons[0]}`;
   const frag = a.fragment ? ` · fragment ${a.fragment}` : '';
   const alts = ps.slice(1).map(p=>`<tr><td>${p.rank}</td><td class="seq">${p.f_seq}${snpLine(p.f_snps,p.f_repeat)}</td><td class="seq">${p.r_seq}${snpLine(p.r_snps,p.r_repeat)}</td><td>${p.f_tm}/${p.r_tm}</td><td class="${dTm(p)>DTM_LIMIT?'hot':''}">${dTmText(p)}</td><td>${p.product}</td><td>${esc(ispcrText(p.ispcr))}</td></tr>`).join('');
+  const hasNa = b.f_tm_na != null;
   const swapped = reordered(a)
     ? `<li>Showing Primer3 rank ${b.rank} instead of rank 1: its primers are matched to within ${DTM_LIMIT} °C
         (ΔTm ${dTmText(b)} vs ${dTmText(a.pairs[0])}). Rank 1 is still listed under the alternatives, and it
@@ -762,10 +764,10 @@ function renderAmp(gene, a){
     <div class="sub">${span}${frag} · target ${fmt(a.target_len)} bp (${esc(META.params.target==='coding'?'coding part':'whole exon')}) · tier <i>${esc(a.tier)}</i>${a.relaxed?' (relaxed)':''}</div>
     ${a.warnings.length||swapped?`<ul class="warns">${swapped}${a.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}
     <div class="table-scroll"><table>
-      <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th>Tm °C</th><th>GC %</th><th></th></tr>
-      <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td><td>${b.f_gc}</td>
+      <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th title="Nearest-neighbour Tm under PCR conditions, with Mg²⁺">Tm °C</th>${hasNa?'<th title="The same tables with Mg²⁺ and dNTP at zero — what a Na⁺-only calculator reports">Tm Na⁺</th>':''}<th>GC %</th><th></th></tr>
+      <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td>${hasNa?`<td class="muted">${b.f_tm_na}</td>`:''}<td>${b.f_gc}</td>
           <td><button class="btn copy" data-copy="${b.f_seq}" data-what="Forward primer">Copy</button></td></tr>
-      <tr><td><span class="tag r">R</span></td><td>${esc(name)}R</td><td class="seq">${b.r_seq}${snpLine(b.r_snps, b.r_repeat)}</td><td>${b.r_len}</td><td>${b.r_tm}</td><td>${b.r_gc}</td>
+      <tr><td><span class="tag r">R</span></td><td>${esc(name)}R</td><td class="seq">${b.r_seq}${snpLine(b.r_snps, b.r_repeat)}</td><td>${b.r_len}</td><td>${b.r_tm}</td>${hasNa?`<td class="muted">${b.r_tm_na}</td>`:''}<td>${b.r_gc}</td>
           <td><button class="btn copy" data-copy="${b.r_seq}" data-what="Reverse primer">Copy</button></td></tr>
     </table></div>
     <div class="facts">

@@ -45,6 +45,7 @@ function mkGene(name, chrom, strand, transcript, refseq){
         f_tm:60, r_tm:60, f_gc:50, r_gc:50, f_len:18, r_len:18, product:end-start+1,
         penalty:1, f_dist:50, r_dist:50, chrom, start, end, amplicon:seq,
         f_snps:[], r_snps:[], f_repeat:0, r_repeat:0,
+        f_tm_na:54.2, r_tm_na:54.0, d_tm:0,
         ispcr:{checked:true,on_target:true,off_target:[]}}]}],
     failures:[],
   };
@@ -56,7 +57,8 @@ const PLUSG  = mkGene('PLUSG',  '7',  1, 'ENST00000000001.3', 'NM_000001.4');
 {
   const a = PLUSG.amplicons[0], p1 = a.pairs[0];
   p1.f_tm = 62; p1.r_tm = 58;
-  a.pairs.push({...p1, rank:2, f_tm:60, r_tm:60.5, f_seq:'ACGTACGTACGTACGTAA',
+  p1.d_tm = 4;
+  a.pairs.push({...p1, rank:2, f_tm:60, r_tm:60.5, d_tm:0.5, f_seq:'ACGTACGTACGTACGTAA',
                 r_seq:'TGCATGCATGCATGCATT', penalty:2});
 }
 const MINUSG = mkGene('MINUSG', '8', -1, 'ENST00000000002.1', 'NM_000002.2');
@@ -243,13 +245,23 @@ api.setPref(false);
 
 /* A matched rank 1 must never be displaced. */
 const good = JSON.parse(JSON.stringify(PLUSG)).amplicons[0];
-good.pairs[0].f_tm = 60; good.pairs[0].r_tm = 60;
+good.pairs[0].f_tm = 60; good.pairs[0].r_tm = 60; good.pairs[0].d_tm = 0;
 api.setPref(true);
 ok(api.bestPair(good).rank === 1, 'an already-matched rank 1 is left alone');
 api.setPref(false);
 
 /* The TSV export carries the delta too. */
 ok(api.geneTSV(PLUSG).split('\n')[0].includes('dTm_pair'), 'TSV export includes dTm');
+
+/* The published d_tm wins over recomputing it, so the three numbers a reader
+   sees always agree; a build without it still works. */
+const withD = JSON.parse(JSON.stringify(PLUSG)).amplicons[0];
+ok(api.dTm(withD.pairs[0]) === 4, 'the published d_tm is used when present');
+delete withD.pairs[0].d_tm;
+ok(api.dTm(withD.pairs[0]) === 4, 'and is recomputed for a build that predates it');
+
+await api.showVariant('PLUSG:c.15T>G');
+ok(has('ΔTm'), 'the variant table still carries ΔTm with the published field');
 
 /* ---- an unknown transcript resolved through UCSC (A4/A5) ---- */
 const before = ucscCalls;

@@ -6,8 +6,9 @@ Intronic PCR/Sanger primers for **every coding exon of a list of genes**, design
 ExonPrimer way, exported to **Excel**, and published as a **GitHub Pages site** where you pick a
 gene and an exon — or paste a variant — to get the precomputed primers.
 
-The live site covers **4,471 genes / 60,677 amplicons** (GRCh38, MANE Select), each primer pair
-checked against common SNPs, repeats, segmental duplications and genome-wide in-silico PCR.
+The gene list covers **6,437 genes** (GRCh38, MANE Select) — the original panel merged with the
+**OMIM-morbid set**, every gene with an OMIM disease. Each primer pair is checked against common
+SNPs, repeats, segmental duplications and genome-wide in-silico PCR.
 Search a gene (`MTHFR`), a variant (`POLG:c.2243G>C`) or a position (`chr15:89327201`), and
 download the whole panel as one Excel workbook.
 
@@ -18,8 +19,10 @@ download the whole panel as one Excel workbook.
 
 For each gene in `genes.txt`:
 
-1. Gets the exon structure from Ensembl REST — the **MANE Select** transcript (RefSeq NM reported),
-   falling back to the Ensembl canonical transcript, or a transcript you name.
+1. Gets the exon structure of the **MANE Select** transcript (RefSeq NM reported) from the UCSC
+   `mane` track — one request per chromosome for the whole genome. Ensembl REST is asked per gene
+   only for what the track cannot answer: a transcript you name, a gene with no MANE transcript
+   (Ensembl canonical is then used), or a row the track could not provide.
 2. Takes each **coding exon** as a target (by default the coding part only; `--target full` for
    whole exons). Exons are numbered by their rank in the transcript.
 3. Applies ExonPrimer's rules:
@@ -34,8 +37,10 @@ For each gene in `genes.txt`:
      = 320 bp (override with `--max-target`);
    - repeats are soft-masked and primers with a 3′ end in a repeat are rejected
      (the equivalent of ExonPrimer's mispriming-library option).
-4. Runs Primer3 (Tm 57–63 °C, opt 60; 18–27 nt, opt 20; GC 30–70 %; GC clamp). If nothing is
-   found it retries once with relaxed settings and flags the result.
+4. Runs Primer3 (Tm 57–63 °C, opt 60; 18–27 nt, opt 20; GC 30–70 %; GC clamp), with the two
+   primers of a pair matched to within **2 °C** (`--max-tm-diff`, and `--wt-tm-diff` for how hard
+   Primer3 prefers a matched pair — see *Tm* below). If nothing is found it retries once with
+   relaxed settings and flags the result.
 
 ### Safeguards (as in EasyExonPrimer, Wu & Munroe 2006)
 
@@ -70,11 +75,54 @@ duplications and (when checked) specific. Otherwise it is **Check**, with the re
 Set the parameters to match the ones you use on the ExonPrimer form (`--product`, `--min-dist`,
 `--primer-region`, `--max-target`, `--overlap`, `--tm`, `--size`, `--gc`, `--gc-clamp`).
 
+## Tm, and why two tools disagree
+
+The Tm columns are Primer3's nearest-neighbour value (SantaLucia 1998). What matters is the
+conditions, which are now stated rather than inherited from a library default:
+
+| | default | flag |
+|---|---|---|
+| monovalent cations (Na⁺) | 50 mM | `--salt` |
+| divalent cations (Mg²⁺) | 1.5 mM | `--salt` |
+| total dNTP | 0.6 mM | `--salt` |
+| annealing oligo | 50 nM | `--salt` |
+
+These were previously left to `primer3-py`'s defaults, which is why the reported Tm is a
+**PCR-condition** Tm. The Mg²⁺ term is worth about **6 °C** on a 20-mer: `PRKCG_E5F`
+`ACTGTGGCTCCCTCCTCTAC` reads **60.3 °C** here and **54.4 °C** with Mg²⁺ and dNTP at zero, from
+the very same tables. Most simple web calculators model Na⁺ alone, so they will read about 6 °C
+lower — that is a difference of convention, not a disagreement about the primer. Both values are
+now reported side by side (`F Tm PCR` / `F Tm Na+`) so no one has to guess.
+
+The nearest-neighbour **ΔTm** between the two primers of a pair is stable across conventions.
+Simple GC rules are not: for the pair above they give a ΔTm of 2.0 °C where both
+nearest-neighbour models give 0.4 °C.
+
+### Matching the two primers of a pair
+
+`--max-tm-diff` (default **2 °C**) is the ceiling, and `--wt-tm-diff` (default **1**) is how hard
+Primer3 prefers a matched pair. The weight matters more than the ceiling: **Primer3's own default
+for it is 0**, so without it a matched pair is merely *allowed*, never *preferred* — which is why
+10 % of the previous build's best pairs exceeded 2 °C.
+
+Both levers change which pair wins, so they change primers. Measured on 179 amplicons across 10
+genes, against the previous settings (ceiling 3, weight 0):
+
+| settings | primers unchanged | amplicons with ΔTm > 2 °C | median ΔTm |
+|---|---|---|---|
+| ceiling 3, weight 0 (before) | — | 18 | 0.5 |
+| ceiling 2, weight 0 | 91 % | 7 | 0.5 |
+| ceiling 2, weight 1 (now) | 39 % | **0** | 0.2 |
+
+The count of OK amplicons is the same in all three, so nothing is lost either way — it is a
+choice between matched pairs and leaving a published panel alone. `--wt-tm-diff 0` keeps 91 % of
+the primers and still removes most of the wide pairs, if that trade suits you better.
+
 ## Excel output
 
 | Sheet | Content |
 |---|---|
-| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, Tm, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
+| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, **both Tm values** (PCR conditions and Na⁺ only), **ΔTm F–R**, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
 | Alternatives | The best pair plus 2 alternatives per amplicon, each with SNPs and in-silico PCR result |
 | Amplicons | Amplicon sequences, exons UPPER / introns lower |
 | Genes | Transcript, RefSeq, coding exons, amplicons per gene |
@@ -92,7 +140,7 @@ python exonprimer_batch.py --help                                    # all optio
 ```
 
 Ensembl and UCSC responses are cached in `.cache/`, so reruns with new parameters are fast.
-UCSC is queried at most once per second (`--ucsc-delay`).
+UCSC is queried at most once per second (`--ucsc-delay`), which is the rate UCSC asks for.
 `--assembly GRCh37` uses the GRCh37 Ensembl server and hg19 annotations (no MANE there,
 canonical is used).
 
@@ -109,6 +157,36 @@ python exonprimer_batch.py genes.txt --ispcr tools/isPcr --genome-2bit tools/hg3
 isPcr indexes the whole genome in memory (several GB of RAM). If it fails, the run continues
 and the output says "in-silico PCR not run". On macOS the downloaded binary is unsigned, so
 Gatekeeper may need `xattr -d com.apple.quarantine tools/isPcr`.
+
+### How long a build takes
+
+Designing is not the cost — a fully cached run does 5 genes in 0.86 s at 97 % CPU, so the 6,437
+genes are about **18 minutes of computation**. Everything else is waiting on public APIs, which
+is why the pipeline is shaped around cutting the *number* of requests rather than their size.
+Measured per gene, in series:
+
+| | before | now |
+|---|---|---|
+| exon structure | 1 Ensembl `/lookup/symbol` per gene, 6.4 s | UCSC `mane`, **24 requests for the whole genome** |
+| soft-masked sequence | 1 Ensembl GET per gene, 14.1 s | `POST /sequence/region`, 50 regions at a time, **0.88 s** |
+| SNPs / repeats / segdups | 3 UCSC requests per gene, 2.1 s + 3 s of mandated delay | unchanged |
+| Primer3 and output | 0.17 s | unchanged |
+
+Ensembl's cost is per-request overhead, not payload: the same endpoint took 19.4 s for a 25 KB
+sequence and 6.7 s for a 218 KB one. Batching is the whole fix — 8,942 Ensembl requests become
+about 115, which is also the courteous thing to do to a public server.
+
+The UCSC annotation is deliberately left alone. UCSC's API documentation asks for *"a maximum of
+one hit every second"* and runs a `botDelay` system that can impose *"a restriction of access"*;
+if it throttled us, `annotate()` would carry on with the annotation missing, every amplicon of
+that gene would be flagged `snps not checked` and demoted to **CHECK**, and the build would still
+publish. Trading an hour for that risk is a bad deal. Fetching the tracks as bigBed files instead
+is UCSC's own recommendation for bulk use, but querying `dbSnp155Common.bb` (1.96 GB) by remote
+range costs 2.0 s per gene — no better than the API — so it would only pay off by downloading and
+caching the file, which is a separate piece of work.
+
+In the sharded workflow (4 concurrent jobs) that is roughly **2 h 45 for 6,437 genes**, against
+about 46 h before.
 
 ## Find the primers for a variant
 
@@ -251,7 +329,14 @@ that never promotes a pair with an off-target product, and that a gene symbol is
 a variant.
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
-Ensembl/UCSC/isPcr responses. It checks primer coordinates against the genome, minimum distance,
+Ensembl/UCSC/isPcr responses. The fakes serve the UCSC `mane` track and the batched
+`POST /sequence/region` too, so the fast paths are the ones under test: that a model built from
+the MANE track is **identical** to one built from Ensembl (exons, transcript, CDS bounds, region),
+that a gene missing from the track falls back to Ensembl rather than being skipped, that one POST
+covers many genes and the sequences match the single-region ones, and that a dead batch endpoint
+falls back instead of losing data. It also pins both Tm values, the ΔTm ceiling, and that the salt
+conditions actually reach Primer3. Beyond that it checks primer coordinates against the genome,
+minimum distance,
 coverage of every coding base, SNP avoidance and the 3′-end rule, the MAF cut-off, repeat
 avoidance and the 5′-only fallback, segmental-duplication alerts, and that an off-target
 in-silico PCR product demotes a pair.

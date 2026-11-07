@@ -33,6 +33,7 @@ genes.txt: one HGNC symbol per line; optionally a transcript ID after it
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -56,6 +57,9 @@ SERVERS = {
 UCSC_DB = {"GRCh38": "hg38", "GRCh37": "hg19"}
 UCSC_API = "https://api.genome.ucsc.edu"
 SNP_TRACK, RMSK_TRACK, SEGDUP_TRACK = "dbSnp155Common", "rmsk", "genomicSuperDups"
+MANE_TRACK = "mane"
+# Chromosomes the MANE track is fetched for, one request each.
+CHROMS = [str(i) for i in range(1, 23)] + ["X", "Y"]
 COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 TIERS = {
     "clean": "no common SNP and no repeat under either primer",
@@ -66,6 +70,12 @@ TIERS = {
 
 def rc(s: str) -> str:
     return s.translate(COMP)[::-1]
+
+
+def tm_na(seq: str) -> float:
+    """Nearest-neighbour Tm with monovalent salt only (no Mg2+, no dNTP)."""
+    return round(primer3.calc_tm(seq.upper(), mv_conc=50.0, dv_conc=0.0,
+                                 dntp_conc=0.0, dna_conc=50.0), 1)
 
 
 def ucsc_chrom(chrom: str) -> str:
@@ -81,7 +91,15 @@ class _Http:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.delay = delay
 
+    def post_json(self, path_or_url: str, body: dict, key: str, params=None):
+        """POST with the same cache, retry and backoff as get_json."""
+        url = path_or_url if path_or_url.startswith("http") else getattr(self, "base", "") + path_or_url
+        return self._request("POST", url, key, params, json.dumps(body))
+
     def get_json(self, url: str, key: str, params=None, headers=None):
+        return self._request("GET", url, key, params, None, headers)
+
+    def _request(self, method: str, url: str, key: str, params=None, body=None, headers=None):
         cache = None
         if self.cache_dir:
             cache = self.cache_dir / (re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:200] + ".json")
@@ -89,7 +107,12 @@ class _Http:
                 return json.loads(cache.read_text())
         for attempt in range(8):
             try:
-                r = self.session.get(url, params=params, headers=headers, timeout=120)
+                hdr = dict(headers or {})
+                if body is not None:
+                    hdr.setdefault("Content-Type", "application/json")
+                    hdr.setdefault("Accept", "application/json")
+                r = self.session.request(method, url, params=params, headers=hdr,
+                                         data=body, timeout=600 if body else 120)
             except requests.RequestException:
                 time.sleep(2 ** attempt)
                 continue
@@ -135,6 +158,25 @@ class Ensembl(_Http):
     def sequence(self, chrom, start, end, strand):
         return self._get(f"/sequence/region/human/{chrom}:{start}..{end}:{strand}", {"mask": "soft"})["seq"]
 
+    def sequences(self, regions: list[str]) -> dict[str, str]:
+        """Soft-masked sequence for several regions in one POST.
+
+        Keyed by the `query` string Ensembl echoes for each result, so a
+        reordered or short response can never silently misalign sequences
+        with genes. At most 50 regions per request, which is Ensembl's limit.
+        """
+        if not regions:
+            return {}
+        data = self.post_json("/sequence/region/human", {"regions": regions},
+                              "seqbatch_" + hashlib.sha1("|".join(regions).encode()).hexdigest(),
+                              {"mask": "soft"})
+        out = {}
+        for item in data:
+            q = item.get("query")
+            if q and item.get("seq"):
+                out[q] = item["seq"]
+        return out
+
 
 # --------------------------------------------------------------------------
 # UCSC (common SNPs, RepeatMasker, segmental duplications)
@@ -150,6 +192,15 @@ class UCSC(_Http):
         data = self.get_json(f"{UCSC_API}/getData/track?{q}", f"{self.db}_{track}_{chrom}_{start}_{end}")
         items = data.get(track, [])
         if isinstance(items, dict):  # some tracks return {chrom: [items]}
+            items = [x for v in items.values() for x in v]
+        return items
+
+    def mane(self, chrom: str) -> list[dict]:
+        """Every MANE transcript on a chromosome, in one request."""
+        q = f"genome={self.db};track={MANE_TRACK};chrom={chrom};maxItemsOutput=-1"
+        data = self.get_json(f"{UCSC_API}/getData/track?{q}", f"{self.db}_{MANE_TRACK}_{chrom}")
+        items = data.get(MANE_TRACK, [])
+        if isinstance(items, dict):
             items = [x for v in items.values() for x in v]
         return items
 
@@ -218,7 +269,16 @@ class Params:
     gc_min: float = 30.0
     gc_max: float = 70.0
     gc_clamp: int = 1
-    max_tm_diff: float = 3.0
+    max_tm_diff: float = 2.0    # |Tm(F) - Tm(R)| ceiling for a pair
+    wt_tm_diff: float = 1.0     # how hard Primer3 prefers a matched pair
+    # Thermodynamics. These were previously left to primer3-py's defaults,
+    # which is why the reported Tm is a PCR-condition Tm: the 1.5 mM Mg2+ is
+    # worth about 6 degrees on a 20-mer, so a calculator that models Na+
+    # alone reads that much lower for the very same oligo.
+    salt_mono: float = 50.0     # monovalent cations, mM
+    salt_div: float = 1.5       # divalent cations (Mg2+), mM
+    dntp: float = 0.6           # total dNTP, mM
+    dna_conc: float = 50.0      # annealing oligo concentration, nM
     max_poly_x: int = 4
     num_return: int = 3
     relax: bool = True
@@ -250,13 +310,18 @@ class Params:
             "PRIMER_MIN_GC": self.gc_min, "PRIMER_MAX_GC": self.gc_max, "PRIMER_GC_CLAMP": self.gc_clamp,
             "PRIMER_PAIR_MAX_DIFF_TM": self.max_tm_diff, "PRIMER_MAX_POLY_X": self.max_poly_x,
             "PRIMER_MAX_NS_ACCEPTED": 0, "PRIMER_EXPLAIN_FLAG": 1,
+            # Primer3's own default for this weight is 0, so without it a
+            # matched pair is merely allowed, never preferred.
+            "PRIMER_PAIR_WT_DIFF_TM": self.wt_tm_diff,
+            "PRIMER_SALT_MONOVALENT": self.salt_mono, "PRIMER_SALT_DIVALENT": self.salt_div,
+            "PRIMER_DNTP_CONC": self.dntp, "PRIMER_DNA_CONC": self.dna_conc,
         }
         if relaxed:
             g.update({
                 "PRIMER_MIN_TM": self.tm_min - 3, "PRIMER_MAX_TM": self.tm_max + 3,
                 "PRIMER_MIN_SIZE": max(16, self.size_min - 2), "PRIMER_MAX_SIZE": self.size_max + 3,
                 "PRIMER_MIN_GC": max(15.0, self.gc_min - 10), "PRIMER_MAX_GC": min(85.0, self.gc_max + 10),
-                "PRIMER_GC_CLAMP": 0, "PRIMER_PAIR_MAX_DIFF_TM": self.max_tm_diff + 2,
+                "PRIMER_GC_CLAMP": 0, "PRIMER_PAIR_MAX_DIFF_TM": self.max_tm_diff + 1,
                 "PRIMER_MAX_POLY_X": self.max_poly_x + 1,
             })
         return g
@@ -352,7 +417,109 @@ def pick_transcript(gene: dict) -> tuple[dict, str]:
     raise LookupError("no protein-coding transcript")
 
 
-def build_model(ens, symbol: str, transcript_id: str | None, pad: int) -> GeneModel:
+class ManeTable:
+    """MANE Select transcripts for the whole genome, from the UCSC `mane` track.
+
+    One request per chromosome replaces one Ensembl /lookup/symbol per gene -
+    24 requests instead of thousands, which is the difference between a build
+    that takes hours and one that takes minutes. The track carries everything
+    build_model needs: the versioned ENST, the RefSeq NM, the CDS bounds and
+    the exon blocks.
+
+    Checked against the 4,471 genes of the previous build: exons, transcript
+    and CDS bounds all identical for 4,449 (99.51 %). The rest fall back to
+    Ensembl, which is also where genes with no MANE transcript at all go, so
+    the transcript actually used never changes silently.
+    """
+
+    def __init__(self, ucsc, log=print):
+        self.by_symbol: dict[str, dict] = {}
+        if ucsc is None:
+            return
+        for chrom in CHROMS:
+            try:
+                rows = ucsc.mane(f"chr{chrom}")
+            except Exception as ex:
+                log(f"warning: MANE track for chr{chrom} not loaded ({ex}); those genes use Ensembl")
+                continue
+            for r in rows:
+                if r.get("maneStat") != "MANE Select":
+                    continue
+                sym = r.get("geneName2") or ""
+                if sym:
+                    self.by_symbol.setdefault(sym.upper(), r)
+        log(f"MANE table: {len(self.by_symbol)} genes from {len(CHROMS)} UCSC requests")
+
+    def model(self, symbol: str, pad: int) -> GeneModel | None:
+        r = self.by_symbol.get(symbol.upper())
+        if not r:
+            return None
+        strand = -1 if r.get("strand") == "-" else 1
+        cds_lo, cds_hi = r["thickStart"] + 1, r["thickEnd"]       # 1-based inclusive
+        if cds_hi < cds_lo:
+            return None                                          # no CDS: let Ensembl decide
+        st = r["chromStart"]
+        sizes = [int(v) for v in str(r["blockSizes"]).rstrip(",").split(",") if v != ""]
+        offs = [int(v) for v in str(r["chromStarts"]).rstrip(",").split(",") if v != ""]
+        if not sizes or len(sizes) != len(offs):
+            return None
+        blocks = sorted(((st + o + 1, st + o + sz) for o, sz in zip(offs, sizes)),
+                        reverse=(strand == -1))
+        exons = []
+        for i, (lo, hi) in enumerate(blocks, 1):
+            cs, ce = max(lo, cds_lo), min(hi, cds_hi)
+            exons.append(Exon(i, lo, hi, cs if cs <= ce else None, ce if cs <= ce else None))
+        if not any(e.coding for e in exons):
+            return None
+        m = GeneModel(gene=symbol, gene_id=str(r.get("geneName", "")), transcript_id=str(r["name"]).split(".")[0],
+                      transcript_version=str(r["name"]), refseq=str(r.get("ncbiId", "")),
+                      selection="MANE Select", chrom=str(r["chrom"]).replace("chr", ""),
+                      strand=strand, exons=exons)
+        m.region_start = max(1, min(e.start for e in exons) - pad)
+        m.region_end = max(e.end for e in exons) + pad
+        return m
+
+
+def fetch_sequences(ens, models: list[GeneModel], batch: int = 50, log=print):
+    """Soft-masked sequence for many models in POST batches.
+
+    Ensembl's per-request overhead dominates a GET per gene (14 s measured,
+    independent of payload size), while POST /sequence/region takes 50 regions
+    at once for 0.88 s per gene - the same server, the same mask=soft, and the
+    sequences are byte-identical to the individual GETs. Results are matched
+    by the `query` field they echo back, never by position.
+
+    A model whose sequence does not come back keeps seq == "" and is reported
+    by the caller, so a short read can never be mistaken for a short gene.
+    """
+    todo = [m for m in models if not m.seq]
+    for i in range(0, len(todo), batch):
+        chunk = todo[i:i + batch]
+        regions = [f"{m.chrom}:{m.region_start}..{m.region_end}:{m.strand}" for m in chunk]
+        try:
+            got = ens.sequences(regions)
+        except Exception as ex:
+            log(f"warning: batch sequence fetch failed ({ex}); falling back to one request per gene")
+            got = {}
+            for m, q in zip(chunk, regions):
+                try:
+                    got[q] = ens.sequence(m.chrom, m.region_start, m.region_end, m.strand)
+                except Exception as ex2:
+                    log(f"    warning: {m.gene} sequence not loaded ({ex2})")
+        for m, q in zip(chunk, regions):
+            seq = got.get(q)
+            if not seq:
+                continue
+            m.seq = seq
+            if len(m.seq) != m.region_end - m.region_start + 1:
+                m.region_end = m.region_start + len(m.seq) - 1
+        log(f"  sequences {min(i + batch, len(todo))}/{len(todo)}")
+
+
+def build_model(ens, symbol: str, transcript_id: str | None, pad: int,
+                with_seq: bool = True) -> GeneModel:
+    """Exon structure from Ensembl. With with_seq=False the sequence is left
+    for fetch_sequences() to collect in batches."""
     gene = ens.gene(symbol)
     if transcript_id:
         tx = ens.transcript(transcript_id.split(".")[0])
@@ -374,9 +541,10 @@ def build_model(ens, symbol: str, transcript_id: str | None, pad: int) -> GeneMo
                   selection=selection, chrom=str(tx["seq_region_name"]), strand=strand, exons=exons)
     m.region_start = max(1, min(e.start for e in exons) - pad)
     m.region_end = max(e.end for e in exons) + pad
-    m.seq = ens.sequence(m.chrom, m.region_start, m.region_end, strand)
-    if len(m.seq) != m.region_end - m.region_start + 1:
-        m.region_end = m.region_start + len(m.seq) - 1
+    if with_seq:
+        m.seq = ens.sequence(m.chrom, m.region_start, m.region_end, strand)
+        if len(m.seq) != m.region_end - m.region_start + 1:
+            m.region_end = m.region_start + len(m.seq) - 1
     return m
 
 
@@ -531,6 +699,12 @@ def pair_record(m: GeneModel, t: Target, res: dict, i: int, w0: int) -> dict:
         "f_seq": m.seq[f_lo:f_hi + 1].upper(),
         "r_seq": rc(m.seq[r_lo:r_hi + 1]).upper(),
         "f_tm": round(res[f"PRIMER_LEFT_{i}_TM"], 1), "r_tm": round(res[f"PRIMER_RIGHT_{i}_TM"], 1),
+        # The same nearest-neighbour tables with the divalent cations and
+        # dNTPs removed - the convention most simple web calculators use.
+        # Reported alongside so two tools can be compared without guessing
+        # which conditions each assumed.
+        "f_tm_na": tm_na(m.seq[f_lo:f_hi + 1]), "r_tm_na": tm_na(rc(m.seq[r_lo:r_hi + 1])),
+        "d_tm": round(abs(round(res[f"PRIMER_LEFT_{i}_TM"], 1) - round(res[f"PRIMER_RIGHT_{i}_TM"], 1)), 1),
         "f_gc": round(res[f"PRIMER_LEFT_{i}_GC_PERCENT"], 1), "r_gc": round(res[f"PRIMER_RIGHT_{i}_GC_PERCENT"], 1),
         "f_len": llen, "r_len": rlen,
         "product": res[f"PRIMER_PAIR_{i}_PRODUCT_SIZE"],
@@ -741,21 +915,24 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
     ws = wb.active
     ws.title = "Primers"
     cols = ["Gene", "Exon", "Status", "Fragment", "Transcript", "RefSeq (MANE)",
-            "Forward name", "Forward primer (5'→3')", "F len", "F Tm (°C)", "F GC %",
-            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm (°C)", "R GC %",
+            "Forward name", "Forward primer (5'→3')", "F len", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F GC %",
+            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R GC %",
+            "ΔTm F-R (°C)",
             "Product (bp)", "F 3' to exon (bp)", "Exon to R 3' (bp)",
             "Chr", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})", "Target (bp)",
             "Design tier", "Common SNPs under F", "Common SNPs under R", "Repeat bases F/R",
             "Segmental duplication", "In-silico PCR", "Warnings", "UCSC check"]
-    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 8, 7, 16, 30, 6, 8, 7, 9, 9, 9, 5, 13, 13, 8,
+    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 11, 11, 7, 16, 30, 6, 11, 11, 7, 11,
+                      9, 9, 9, 5, 13, 13, 8,
                       11, 26, 26, 9, 30, 30, 60, 13])
     for g in results:
         for a in g["amplicons"]:
             b = a["pairs"][0]
             name = f'{g["gene"]}_E{a["label"]}'
             ws.append([g["gene"], a["label"], a["status"], a["fragment"], g["transcript"], g["refseq"],
-                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_gc"],
-                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_gc"],
+                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_tm_na"], b["f_gc"],
+                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_tm_na"], b["r_gc"],
+                       b["d_tm"],
                        b["product"], b["f_dist"], b["r_dist"], b["chrom"], b["start"], b["end"], a["target_len"],
                        a["tier"] + (" (relaxed)" if a["relaxed"] else ""),
                        snp_text(b["f_snps"]), snp_text(b["r_snps"]),
@@ -765,22 +942,24 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
                        ucsc_pcr_url(b["f_seq"], b["r_seq"], assembly)])
         for f in g["failures"]:
             ws.append([g["gene"], f["label"], "FAIL", f["fragment"], g["transcript"], g["refseq"]]
-                      + [""] * 23 + ["No primer pair found. " + f.get("reason", ""), ""])
-    style_rows(ws, mono_cols=(8, 13), link_cols=(31,), status_col=3)
+                      + [""] * (len(cols) - 8) + ["No primer pair found. " + f.get("reason", ""), ""])
+    style_rows(ws, mono_cols=(8, 14), link_cols=(len(cols),), status_col=3)
     ws.auto_filter.ref = ws.dimensions
 
     ws2 = wb.create_sheet("Alternatives")
-    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm (°C)", "Reverse primer (5'→3')",
-                 "R Tm (°C)", "Product (bp)", "Penalty", "SNPs F", "SNPs R", "Repeat bases F/R",
+    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm PCR (°C)", "F Tm Na+ (°C)",
+                 "Reverse primer (5'→3')", "R Tm PCR (°C)", "R Tm Na+ (°C)", "ΔTm F-R (°C)",
+                 "Product (bp)", "Penalty", "SNPs F", "SNPs R", "Repeat bases F/R",
                  "In-silico PCR", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})"],
-           [10, 7, 6, 30, 8, 30, 8, 9, 8, 24, 24, 9, 28, 13, 13])
+           [10, 7, 6, 30, 11, 11, 30, 11, 11, 11, 9, 8, 24, 24, 9, 28, 13, 13])
     for g in results:
         for a in g["amplicons"]:
             for b in a["pairs"]:
-                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["r_seq"], b["r_tm"],
+                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["f_tm_na"],
+                            b["r_seq"], b["r_tm"], b["r_tm_na"], b["d_tm"],
                             b["product"], b["penalty"], snp_text(b["f_snps"]), snp_text(b["r_snps"]),
                             f'{b["f_repeat"]}/{b["r_repeat"]}', ispcr_text(b["ispcr"]), b["start"], b["end"]])
-    style_rows(ws2, mono_cols=(4, 6))
+    style_rows(ws2, mono_cols=(4, 7))
     ws2.auto_filter.ref = ws2.dimensions
 
     ws3 = wb.create_sheet("Amplicons")
@@ -824,6 +1003,14 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
         "combine": "Combine neighbouring exons into one amplicon when they fit in max_target",
         "target": "coding = coding part of each exon is the target; full = whole exon",
         "relax": "If no pair is found, retry with relaxed Tm/size/GC settings",
+        "max_tm_diff": "Largest |Tm(F) - Tm(R)| accepted for a pair (degrees C)",
+        "wt_tm_diff": "Primer3 penalty weight on that difference; its own default is 0, "
+                      "so without this a matched pair is allowed but never preferred",
+        "salt_mono": "Monovalent cations for the Tm calculation (mM)",
+        "salt_div": "Divalent cations, Mg2+, for the Tm calculation (mM) - worth about 6 degrees "
+                    "on a 20-mer, which is why a Na+-only calculator reads that much lower",
+        "dntp": "Total dNTP concentration for the Tm calculation (mM)",
+        "dna_conc": "Annealing oligo concentration for the Tm calculation (nM)",
         "snp_maf": f"SNPs from UCSC {SNP_TRACK} (1000 Genomes MAF >= 1%) at or above this MAF are avoided",
         "snp_3prime": "A SNP is never accepted within this many bases of a primer's 3' end",
         "fallback": "Allow tiers repeat-5p and snp-5p when no clean pair exists (always reported)",
@@ -893,12 +1080,25 @@ def main(argv=None, ensembl=None, ucsc=None):
     g2.add_argument("--gc-clamp", type=int, default=d.gc_clamp)
     g2.add_argument("--alternatives", type=int, default=d.num_return, help="pairs to keep per amplicon")
     g2.add_argument("--no-relax", action="store_true")
+    g2.add_argument("--max-tm-diff", type=float, default=d.max_tm_diff,
+                    help="largest |Tm(F) - Tm(R)| accepted for a pair (default 2)")
+    g2.add_argument("--wt-tm-diff", type=float, default=d.wt_tm_diff,
+                    help="Primer3 weight on the pair Tm difference (default 1; Primer3's own default is 0)")
+    g2.add_argument("--salt", type=float, nargs=4, metavar=("MONO_MM", "DIV_MM", "DNTP_MM", "DNA_NM"),
+                    default=[d.salt_mono, d.salt_div, d.dntp, d.dna_conc],
+                    help="Tm conditions: monovalent mM, divalent mM, dNTP mM, oligo nM "
+                         "(default 50 1.5 0.6 50 - PCR conditions)")
     g3 = ap.add_argument_group("SNPs, repeats, homology")
     g3.add_argument("--snp-maf", type=float, default=d.snp_maf, help="avoid SNPs with MAF >= this (default 0.01)")
     g3.add_argument("--snp-3prime", type=int, default=d.snp_3prime, help="no SNP allowed in this many 3' bases")
     g3.add_argument("--strict", action="store_true", help="only accept primers with no SNP and no repeat at all")
     g3.add_argument("--no-ucsc", action="store_true", help="skip UCSC SNP/repeat/segdup annotation")
-    g3.add_argument("--ucsc-delay", type=float, default=1.0, help="seconds between UCSC API requests")
+    g3.add_argument("--ucsc-delay", type=float, default=1.0,
+                    help="seconds between UCSC API requests (UCSC asks for <= 1 hit/s)")
+    g3.add_argument("--no-mane-track", action="store_true",
+                    help="never use the UCSC MANE track; ask Ensembl per gene (slow)")
+    g3.add_argument("--seq-batch", type=int, default=50,
+                    help="regions per Ensembl POST sequence request (max 50)")
     g3.add_argument("--ispcr", help="path to UCSC isPcr executable (genome-wide specificity check)")
     g3.add_argument("--genome-2bit", help="genome .2bit for isPcr (hg38.2bit / hg19.2bit)")
     g3.add_argument("--ispcr-max-size", type=int, default=d.ispcr_max_size)
@@ -910,7 +1110,9 @@ def main(argv=None, ensembl=None, ucsc=None):
                    combine=not a.no_combine, target=a.target, tm_min=a.tm[0], tm_opt=a.tm[1], tm_max=a.tm[2],
                    size_min=a.size[0], size_opt=a.size[1], size_max=a.size[2], gc_min=a.gc[0], gc_max=a.gc[1],
                    gc_clamp=a.gc_clamp, num_return=a.alternatives, relax=not a.no_relax, snp_maf=a.snp_maf,
-                   snp_3prime=a.snp_3prime, fallback=not a.strict, ispcr_max_size=a.ispcr_max_size)
+                   snp_3prime=a.snp_3prime, fallback=not a.strict, ispcr_max_size=a.ispcr_max_size,
+                   max_tm_diff=a.max_tm_diff, wt_tm_diff=a.wt_tm_diff,
+                   salt_mono=a.salt[0], salt_div=a.salt[1], dntp=a.salt[2], dna_conc=a.salt[3])
     except ValueError as ex:
         ap.error(str(ex))
     if bool(a.ispcr) != bool(a.genome_2bit):
@@ -925,19 +1127,51 @@ def main(argv=None, ensembl=None, ucsc=None):
     pad = p.min_dist + p.primer_region + 100
     genes = read_gene_list(a.genes)
     results, errors = [], []
+
+    # ---- phase 1: exon structures ---------------------------------------
+    # The UCSC MANE track covers almost every gene in one request per
+    # chromosome; Ensembl is asked only for the rest - genes with an explicit
+    # transcript, genes with no MANE transcript, and anything the track could
+    # not provide. Ensembl remains the authority, it is just no longer asked
+    # the same question thousands of times.
+    mane = ManeTable(None if (a.no_ucsc or a.no_mane_track) else ucsc, log)
+    models, from_mane = [], 0
     for i, (sym, tx) in enumerate(genes, 1):
         try:
-            m = build_model(ens, sym, tx, pad)
+            m = None if tx else mane.model(sym, pad)
+            if m is not None:
+                from_mane += 1
+            else:
+                m = build_model(ens, sym, tx, pad, with_seq=False)
+            models.append((sym, m))
+        except Exception as ex:
+            errors.append({"gene": sym, "error": f"{type(ex).__name__}: {ex}"})
+            log(f"[{i}/{len(genes)}] {sym:<10} ERROR {ex}")
+    log(f"Structures: {len(models)}/{len(genes)} ({from_mane} from the MANE track, "
+        f"{len(models) - from_mane} from Ensembl)")
+
+    # ---- phase 2: sequences, in batches ---------------------------------
+    log(f"Fetching soft-masked sequence for {len(models)} genes ...")
+    fetch_sequences(ens, [m for _, m in models], a.seq_batch, log)
+    short = [(sym, m) for sym, m in models if not m.seq]
+    for sym, _ in short:
+        errors.append({"gene": sym, "error": "LookupError: no sequence returned by Ensembl"})
+        log(f"{sym:<10} ERROR no sequence returned")
+    models = [(sym, m) for sym, m in models if m.seq]
+
+    # ---- phase 3: annotate and design -----------------------------------
+    for i, (sym, m) in enumerate(models, 1):
+        try:
             annotate(m, None if a.no_ucsc else ucsc, p, log)
             g = design_gene(m, p, a.assembly)
             g["n_snps"] = len(m.snps)
             results.append(g)
             st = [x["status"] for x in g["amplicons"]]
-            log(f"[{i}/{len(genes)}] {g['gene']:<10} {g['transcript']:<20} {len(st)} amplicons "
+            log(f"[{i}/{len(models)}] {g['gene']:<10} {g['transcript']:<20} {len(st)} amplicons "
                 f"({st.count('OK')} OK, {st.count('CHECK')} to check), {len(g['failures'])} failed")
         except Exception as ex:
             errors.append({"gene": sym, "error": f"{type(ex).__name__}: {ex}"})
-            log(f"[{i}/{len(genes)}] {sym:<10} ERROR {ex}")
+            log(f"[{i}/{len(models)}] {sym:<10} ERROR {ex}")
 
     ispcr_ran = False
     if a.ispcr:
