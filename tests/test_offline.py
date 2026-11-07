@@ -487,6 +487,32 @@ def test_noncoding_mane_transcript_is_refused_clearly():
         raise AssertionError("a gene with no coding transcript must be refused")
 
 
+def test_segdups_are_reported_in_a_stable_order():
+    """Only the first three duplicates are reported, and UCSC does not promise
+    an order: a rebuild once rewrote 48 gene files whose segdup set was
+    identical, purely because the list came back shuffled."""
+    items = [{"chromStart": 10, "chromEnd": 20, "otherChrom": "chr2",
+              "otherStart": 100, "otherEnd": 200, "fracMatch": 0.957},
+             {"chromStart": 10, "chromEnd": 20, "otherChrom": "chr22",
+              "otherStart": 300, "otherEnd": 400, "fracMatch": 0.957},
+             {"chromStart": 10, "chromEnd": 20, "otherChrom": "chr16",
+              "otherStart": 500, "otherEnd": 600, "fracMatch": 0.981}]
+
+    class Shuffled(epb.UCSC):
+        def __init__(self, order):
+            self._order = order
+        def track(self, track, chrom, start, end):
+            return [items[i] for i in self._order]
+
+    a = Shuffled([0, 1, 2]).segdups("chr1", 1, 100)
+    b = Shuffled([2, 1, 0]).segdups("chr1", 1, 100)
+    c = Shuffled([1, 0, 2]).segdups("chr1", 1, 100)
+    assert a == b == c, "the same duplicates must be reported in the same order"
+    assert a[0]["identity"] == 98.1, "highest identity first"
+    assert [d["other"] for d in a[1:]] == ["chr22:301-400", "chr2:101-200"], \
+        "ties broken by the locus string, not by UCSC's whim"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

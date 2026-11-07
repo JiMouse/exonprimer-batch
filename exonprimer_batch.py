@@ -223,10 +223,11 @@ class UCSC(_Http):
                 for it in self.track(RMSK_TRACK, chrom, start, end)]
 
     def segdups(self, chrom, start, end) -> list[dict]:
-        return [{"start": int(it["chromStart"]) + 1, "end": int(it["chromEnd"]),
-                 "other": f'{it.get("otherChrom", "")}:{int(it.get("otherStart", 0)) + 1}-{it.get("otherEnd", "")}',
-                 "identity": round(100 * float(it.get("fracMatch", 0)), 1)}
-                for it in self.track(SEGDUP_TRACK, chrom, start, end)]
+        out = [{"start": int(it["chromStart"]) + 1, "end": int(it["chromEnd"]),
+                "other": f'{it.get("otherChrom", "")}:{int(it.get("otherStart", 0)) + 1}-{it.get("otherEnd", "")}',
+                "identity": round(100 * float(it.get("fracMatch", 0)), 1)}
+               for it in self.track(SEGDUP_TRACK, chrom, start, end)]
+        return sorted(out, key=lambda d: (-d["identity"], d["other"], d["start"]))
 
 
 def max_maf(v) -> float | None:
