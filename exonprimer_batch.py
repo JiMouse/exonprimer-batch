@@ -405,6 +405,8 @@ class GeneModel:
 def pick_transcript(gene: dict) -> tuple[dict, str]:
     txs = gene.get("Transcript", [])
     for t in txs:
+        if not t.get("Translation"):
+            continue
         for m in t.get("MANE", []) or []:
             if m.get("type") == "MANE_Select":
                 return t, "MANE Select"

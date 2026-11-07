@@ -466,6 +466,27 @@ def test_salt_conditions_reach_primer3_and_change_the_tm():
         assert x["f_tm"] > x["f_tm_na"], "PCR conditions must read higher than Na+ alone"
 
 
+def test_noncoding_mane_transcript_is_refused_clearly():
+    """MANE tags non-coding transcripts as MANE_Select too - XIST, H19,
+    RNU4-2, TERC, RMRP, SNORD118 are all MANE Select and all have no
+    Translation. Picking one blindly made build_model die on
+    KeyError: 'Translation' instead of saying what was wrong."""
+    class NonCoding(FakeEnsembl):
+        def gene(self, sym):
+            g = super().gene(sym)
+            for t in g["Transcript"]:
+                t.pop("Translation")
+            return g
+    try:
+        epb.build_model(NonCoding(), "PLUSGENE", None, 100, with_seq=False)
+    except LookupError as ex:
+        assert "protein-coding" in str(ex), ex
+    except KeyError as ex:                       # the bug this pins down
+        raise AssertionError(f"KeyError leaked instead of a readable error: {ex}")
+    else:
+        raise AssertionError("a gene with no coding transcript must be refused")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
