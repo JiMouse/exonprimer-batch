@@ -80,9 +80,10 @@ Set the parameters to match the ones you use on the ExonPrimer form (`--product`
 
 ## Tm, and why two tools disagree
 
-The Tm the design works from is Primer3's nearest-neighbour value (SantaLucia 1998); two further
-columns restate the same oligo under other tools' conventions, below. What matters first is the
-conditions, which are now stated rather than inherited from a library default:
+**Two** Tm are reported per primer, and each matches something exactly: `Tm PCR`, the
+SantaLucia 1998 nearest-neighbour value the design was selected on, and `Tm UCSC`, the number
+UCSC in-silico PCR prints for the same oligo. What matters first is the conditions, which are
+stated rather than inherited from a library default:
 
 | | default | flag |
 |---|---|---|
@@ -94,9 +95,9 @@ conditions, which are now stated rather than inherited from a library default:
 These were previously left to `primer3-py`'s defaults, which is why the reported Tm is a
 **PCR-condition** Tm. The Mg²⁺ term is worth about **6 °C** on a 20-mer: `PRKCG_E5F`
 `ACTGTGGCTCCCTCCTCTAC` reads **60.3 °C** here and **54.4 °C** with Mg²⁺ and dNTP at zero, from
-the very same tables. Most simple web calculators model Na⁺ alone, so they will read about 6 °C
-lower — that is a difference of convention, not a disagreement about the primer. Both values are
-now reported side by side (`F Tm PCR` / `F Tm Na+`) so no one has to guess.
+the very same tables. Most simple web calculators model Na⁺ alone, so they read lower — that is
+a difference of convention, not a disagreement about the primer. Expect it when you paste a
+primer into IDT or a similar tool, and do not anneal to what they tell you.
 
 Matching the salt is not always enough, because the *tables* can differ too. UCSC in-silico PCR
 prints a Tm from the older Breslauer 1986 parameters with the Schildkraut–Lifson salt term —
@@ -105,49 +106,57 @@ Primer3 has defaulted to SantaLucia 1998 since 2.0. At identical salt the two di
 **5–8 °C on a 20-mer**, and the gap is sequence-dependent, so no constant offset converts one
 into the other: for `POLG_E3` the forward primer reads 54.2 °C (SantaLucia) vs 59.3 °C (UCSC)
 and the reverse 54.4 vs 62.0, which also inflates the apparent ΔTm of the pair from 0.0 to
-2.7 °C. A third column, `F Tm UCSC` / `R Tm UCSC`, reproduces the UCSC number exactly, so
-cross-checking a pair on hgPcr no longer looks like a bug. Data built before the column gains it
-from `scripts/backfill_tm_ucsc.py`, with no redesign: the value depends only on the primer
-sequence.
+2.7 °C. So `F Tm UCSC` / `R Tm UCSC` reproduces the UCSC number exactly, and cross-checking a
+pair on hgPcr no longer looks like a bug. Data built before the column gains it from
+`scripts/backfill_tm_ucsc.py`, with no redesign: the value depends only on the primer sequence.
 
 A pair's **ΔTm** is stable across *salt* conventions but not across *tables*. `PRKCG_E5` is
-0.2 °C apart under PCR conditions and the same 0.2 °C under Na⁺ alone — the salt moves both
-primers together — but **5.6 °C** apart under UCSC's tables (58.3 vs 63.9), which is the
+0.2 °C apart under PCR conditions and the same 0.2 °C with the magnesium removed — salt moves
+both primers together — but **5.6 °C** apart under UCSC's tables (58.3 vs 63.9), which is the
 difference between a matched pair and one you would redesign. Simple GC rules fail in the other
 direction: both primers of that pair are 60 % GC, so any GC-only formula calls them identical
-whatever their sequences actually do. Matching is done on the `Tm PCR` value, and that is the
-only one of the three that is comparable from pair to pair.
+whatever their sequences actually do. Matching is done on `Tm PCR`, and that is the column to
+compare from pair to pair.
 
 ### Which temperature to use
 
-Three numbers for one oligo invites the question of which is right. Naming a parameter set does
-not answer it, because the columns differ on **two independent axes** — which tables, and which
-salt — and two of the three are SantaLucia:
+**`Tm PCR`.** Always, for anything you do at the bench — it is `F Tm PCR (°C)` in the workbook
+and the plain `Tm °C` column on the site. `Tm UCSC` is there for one purpose: so that a primer
+pasted into hgPcr gives a number you recognise.
 
-| | SantaLucia 1998 | Breslauer 1986 + Schildkraut |
-|---|---|---|
-| **PCR salt** (50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP) | **`Tm PCR`** — the design value, and the one for the bench | *(nothing — see the trap below)* |
-| **Na⁺ only** (50 mM Na⁺) | `Tm Na⁺` — what web calculators report | `Tm UCSC` — what hgPcr prints |
+Each of the two matches something exactly, which is the rule that decided how many to report:
 
-The column to work from is **`Tm PCR`** (`F Tm PCR (°C)` in the workbook, the plain `Tm °C`
-column on the site). It wins on both axes at once: SantaLucia is the modern, better-validated
-set — which is why Primer3 made it the default — and the PCR salt row is the one whose
-conditions are in the tube, since 1.5 mM Mg²⁺ and 0.6 mM dNTP are what a standard reaction
-contains. It is also, exactly, the number the design was selected on: `PRIMER_OPT_TM`, the
-57–63 °C window and `PRIMER_PAIR_MAX_DIFF_TM` all act on this cell and no other.
+| column | tables | salt | matches, exactly |
+|---|---|---|---|
+| **`Tm PCR`** | SantaLucia 1998 | 50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP | the value the design was selected on, under the conditions in the tube |
+| `Tm UCSC` | Breslauer 1986 + Schildkraut | 50 mM Na⁺, no Mg²⁺ | what UCSC in-silico PCR prints |
 
-The other two are translations, not second opinions. `Tm Na⁺` is the *same tables* as the design
-value with the magnesium taken out, so it is not what any primer was chosen on; it is there to
-meet a Na⁺-only calculator on its own terms. `Tm UCSC` is a legacy display — isPcr matches by
-sequence, not Tm, and the command-line tool does not print one at all (we run it with `-out=bed`,
-which has no Tm field). Reading either as if it were the real Tm is how a panel ends up annealed
-5–6 °C too cold, with the non-specific products that follow. The usual rule of thumb — anneal a
-few degrees below the lower primer's Tm, or touch down to it — applies to `Tm PCR` and to
-nothing else here.
+`Tm PCR` wins on both axes at once: SantaLucia is the modern, better-validated set — which is
+why Primer3 made it the default — and the PCR salt is what a standard reaction contains. It is
+also, exactly, the number the design was chosen on: `PRIMER_OPT_TM`, the 57–63 °C window and
+`PRIMER_PAIR_MAX_DIFF_TM` all act on it and on nothing else. So the usual rule of thumb — anneal
+a few degrees below the lower primer's Tm, or touch down to it — applies to this column and to
+no other number on the page.
 
-**The empty cell is a trap, not an oversight.** Switching `calc_tm` to the Breslauer tables
-*without* also zeroing `dv_conc` and `dntp_conc` lands there, and the result is not UCSC's
-number: it is UCSC's number plus **8.56 °C**, on every primer. The offset is exact and
+`Tm UCSC` is a legacy display, and it is worth knowing it is *only* a display: isPcr matches by
+sequence, not by Tm, and the command-line tool prints no Tm at all (we run it with `-out=bed`,
+which has no such field). Use it to confirm you are looking at the same oligo UCSC is, never to
+set a temperature.
+
+**A third column used to sit between these two**, the same SantaLucia tables with the magnesium
+removed (54.2 °C for the POLG forward primer). It was dropped, because it is the one number here
+that matched nothing. It was not the design value — no primer was ever selected on it — and it
+did not reconcile with the calculators it was meant for either: IDT defaults to 250 nM oligo,
+not our 50 nM, and reports 56.5 °C for that same primer. So it agreed with neither us nor them,
+while reading lowest of the three — which made it the number a hurried reader would anneal to,
+5–6 °C too cold, with the non-specific products that follow. The magnesium gap it was explaining
+is explained above in prose instead, where it cannot be mistaken for a target temperature.
+`tm_na()` survives in the code, unpublished: designing under Na⁺-only conditions must land the
+reported Tm exactly on it, which is the cleanest proof that the salt settings reach Primer3.
+
+**Reproducing the UCSC column has a trap in it.** Switching `calc_tm` to the Breslauer tables
+*without* also zeroing `dv_conc` and `dntp_conc` does not give UCSC's number: it gives UCSC's
+number plus **8.56 °C**, on every primer. The offset is exact and
 sequence-independent, because Primer3 converts divalents with `120·√(dv − dntp)` — no sequence
 in it — and Schildkraut then adds a flat `16.6·log10([Na⁺])`:
 
@@ -193,7 +202,7 @@ the primers and still removes most of the wide pairs, if that trade suits you be
 
 | Sheet | Content |
 |---|---|
-| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, **all three Tm values** (PCR conditions, Na⁺ only, and UCSC's formula), **ΔTm F–R**, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
+| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, **both Tm values** (PCR conditions, and UCSC's formula), **ΔTm F–R**, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
 | Alternatives | The best pair plus 2 alternatives per amplicon, each with SNPs and in-silico PCR result |
 | Amplicons | Amplicon sequences, exons UPPER / introns lower |
 | Genes | Transcript, RefSeq, coding exons, amplicons per gene |
@@ -317,9 +326,9 @@ The reported Tm is Primer3's nearest-neighbour value (SantaLucia 1998) under **P
 50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP, 50 nM primer. A calculator that models Na⁺ alone reads
 about **6 °C lower for the same oligo**, and UCSC in-silico PCR, which keeps the older Breslauer
 tables, reads 5–8 °C *higher* than that — so check which convention a tool uses before concluding
-that two tools disagree. Both of those are reported alongside (`Tm Na⁺`, `Tm UCSC`), and the one
-to work from is `Tm PCR`. A pair's ΔTm survives a change of salt but not a change of tables, so
-it too is only comparable within the `Tm PCR` column.
+that two tools disagree. UCSC's value is reported alongside as `Tm UCSC` so that cross-check is
+one glance; the column to work from is `Tm PCR`. A pair's ΔTm survives a change of salt but not
+a change of tables, so it too is only comparable within the `Tm PCR` column.
 
 Every amplicon view shows **ΔTm** for the pair, and the checkbox above the search box re-orders
 the alternatives already published so that a pair matched to within 2 °C comes first. It changes
@@ -410,10 +419,11 @@ Ensembl/UCSC/isPcr responses. The fakes serve the UCSC `mane` track and the batc
 the MANE track is **identical** to one built from Ensembl (exons, transcript, CDS bounds, region),
 that a gene missing from the track falls back to Ensembl rather than being skipped, that one POST
 covers many genes and the sequences match the single-region ones, and that a dead batch endpoint
-falls back instead of losing data. It also pins all three Tm values, the ΔTm ceiling, and that the
-salt conditions actually reach Primer3 — including a check of `tm_ucsc` against the figures UCSC
-in-silico PCR itself prints for a known pair, so a primer3-py upgrade that moves either
-parameter set fails loudly instead of silently shifting a published column. Beyond that it checks
+falls back instead of losing data. It also pins both published Tm values and that exactly two are
+published, the ΔTm ceiling, and that the salt conditions actually reach Primer3 — including a
+check of `tm_ucsc` against the figures UCSC in-silico PCR itself prints for a known pair, and
+one that the magnesium is really zeroed rather than merely the tables switched, so a primer3-py
+upgrade or a tidy-up that moves either fails loudly instead of silently shifting a column. Beyond that it checks
 primer coordinates against the genome, minimum distance, coverage of every coding base, SNP
 avoidance and the 3′-end rule, the MAF cut-off, repeat avoidance and the 5′-only fallback,
 segmental-duplication alerts, and that an off-target in-silico PCR product demotes a pair.

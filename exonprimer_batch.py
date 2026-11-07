@@ -73,7 +73,18 @@ def rc(s: str) -> str:
 
 
 def tm_na(seq: str) -> float:
-    """Nearest-neighbour Tm with monovalent salt only (no Mg2+, no dNTP)."""
+    """Nearest-neighbour Tm with monovalent salt only (no Mg2+, no dNTP).
+
+    Not reported any more. It used to be a column, on the theory that it
+    reconciled our Tm with a Na+-only web calculator, but it reconciles with
+    none of them: they do not use our 50 nM oligo either (IDT defaults to
+    250 nM, which is worth another 2 C), so the number matched no tool while
+    reading lowest of the three - the one a careless reader anneals to, 5-6 C
+    too cold. The two that survive each have an exact referent: the design Tm
+    and tm_ucsc. This is kept because it is the cleanest probe of whether the
+    salt settings really reach Primer3 - design under Na+-only conditions and
+    the reported Tm must land on it (test_salt_conditions_reach_primer3).
+    """
     return round(primer3.calc_tm(seq.upper(), mv_conc=50.0, dv_conc=0.0,
                                  dntp_conc=0.0, dna_conc=50.0), 1)
 
@@ -729,13 +740,10 @@ def pair_record(m: GeneModel, t: Target, res: dict, i: int, w0: int) -> dict:
         "rank": i + 1,
         "f_seq": m.seq[f_lo:f_hi + 1].upper(),
         "r_seq": rc(m.seq[r_lo:r_hi + 1]).upper(),
+        # Two Tm, each with an exact referent: this one is what the design was
+        # selected on, under the conditions in the tube ...
         "f_tm": round(res[f"PRIMER_LEFT_{i}_TM"], 1), "r_tm": round(res[f"PRIMER_RIGHT_{i}_TM"], 1),
-        # The same nearest-neighbour tables with the divalent cations and
-        # dNTPs removed - the convention most simple web calculators use.
-        # Reported alongside so two tools can be compared without guessing
-        # which conditions each assumed.
-        "f_tm_na": tm_na(m.seq[f_lo:f_hi + 1]), "r_tm_na": tm_na(rc(m.seq[r_lo:r_hi + 1])),
-        # What UCSC in-silico PCR prints for the same two oligos (see tm_ucsc).
+        # ... and this one is what UCSC in-silico PCR prints (see tm_ucsc).
         "f_tm_ucsc": tm_ucsc(m.seq[f_lo:f_hi + 1]), "r_tm_ucsc": tm_ucsc(rc(m.seq[r_lo:r_hi + 1])),
         "d_tm": round(abs(round(res[f"PRIMER_LEFT_{i}_TM"], 1) - round(res[f"PRIMER_RIGHT_{i}_TM"], 1)), 1),
         "f_gc": round(res[f"PRIMER_LEFT_{i}_GC_PERCENT"], 1), "r_gc": round(res[f"PRIMER_RIGHT_{i}_GC_PERCENT"], 1),
@@ -948,14 +956,14 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
     ws = wb.active
     ws.title = "Primers"
     cols = ["Gene", "Exon", "Status", "Fragment", "Transcript", "RefSeq (MANE)",
-            "Forward name", "Forward primer (5'→3')", "F len", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F Tm UCSC (°C)", "F GC %",
-            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R Tm UCSC (°C)", "R GC %",
+            "Forward name", "Forward primer (5'→3')", "F len", "F Tm PCR (°C)", "F Tm UCSC (°C)", "F GC %",
+            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm PCR (°C)", "R Tm UCSC (°C)", "R GC %",
             "ΔTm F-R (°C)",
             "Product (bp)", "F 3' to exon (bp)", "Exon to R 3' (bp)",
             "Chr", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})", "Target (bp)",
             "Design tier", "Common SNPs under F", "Common SNPs under R", "Repeat bases F/R",
             "Segmental duplication", "In-silico PCR", "Warnings", "UCSC check"]
-    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 11, 11, 12, 7, 16, 30, 6, 11, 11, 12, 7, 11,
+    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 11, 12, 7, 16, 30, 6, 11, 12, 7, 11,
                       9, 9, 9, 5, 13, 13, 8,
                       11, 26, 26, 9, 30, 30, 60, 13])
     for g in results:
@@ -963,8 +971,8 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
             b = a["pairs"][0]
             name = f'{g["gene"]}_E{a["label"]}'
             ws.append([g["gene"], a["label"], a["status"], a["fragment"], g["transcript"], g["refseq"],
-                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_tm_na"], b["f_tm_ucsc"], b["f_gc"],
-                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_tm_na"], b["r_tm_ucsc"], b["r_gc"],
+                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_tm_ucsc"], b["f_gc"],
+                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_tm_ucsc"], b["r_gc"],
                        b["d_tm"],
                        b["product"], b["f_dist"], b["r_dist"], b["chrom"], b["start"], b["end"], a["target_len"],
                        a["tier"] + (" (relaxed)" if a["relaxed"] else ""),
@@ -976,23 +984,23 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
         for f in g["failures"]:
             ws.append([g["gene"], f["label"], "FAIL", f["fragment"], g["transcript"], g["refseq"]]
                       + [""] * (len(cols) - 8) + ["No primer pair found. " + f.get("reason", ""), ""])
-    style_rows(ws, mono_cols=(8, 15), link_cols=(len(cols),), status_col=3)
+    style_rows(ws, mono_cols=(8, 14), link_cols=(len(cols),), status_col=3)
     ws.auto_filter.ref = ws.dimensions
 
     ws2 = wb.create_sheet("Alternatives")
-    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F Tm UCSC (°C)",
-                 "Reverse primer (5'→3')", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R Tm UCSC (°C)", "ΔTm F-R (°C)",
+    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm PCR (°C)", "F Tm UCSC (°C)",
+                 "Reverse primer (5'→3')", "R Tm PCR (°C)", "R Tm UCSC (°C)", "ΔTm F-R (°C)",
                  "Product (bp)", "Penalty", "SNPs F", "SNPs R", "Repeat bases F/R",
                  "In-silico PCR", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})"],
-           [10, 7, 6, 30, 11, 11, 12, 30, 11, 11, 12, 11, 9, 8, 24, 24, 9, 28, 13, 13])
+           [10, 7, 6, 30, 11, 12, 30, 11, 12, 11, 9, 8, 24, 24, 9, 28, 13, 13])
     for g in results:
         for a in g["amplicons"]:
             for b in a["pairs"]:
-                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["f_tm_na"], b["f_tm_ucsc"],
-                            b["r_seq"], b["r_tm"], b["r_tm_na"], b["r_tm_ucsc"], b["d_tm"],
+                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["f_tm_ucsc"],
+                            b["r_seq"], b["r_tm"], b["r_tm_ucsc"], b["d_tm"],
                             b["product"], b["penalty"], snp_text(b["f_snps"]), snp_text(b["r_snps"]),
                             f'{b["f_repeat"]}/{b["r_repeat"]}', ispcr_text(b["ispcr"]), b["start"], b["end"]])
-    style_rows(ws2, mono_cols=(4, 8))
+    style_rows(ws2, mono_cols=(4, 7))
     ws2.auto_filter.ref = ws2.dimensions
 
     ws3 = wb.create_sheet("Amplicons")

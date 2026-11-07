@@ -45,7 +45,7 @@ function mkGene(name, chrom, strand, transcript, refseq){
         f_tm:60, r_tm:60, f_gc:50, r_gc:50, f_len:18, r_len:18, product:end-start+1,
         penalty:1, f_dist:50, r_dist:50, chrom, start, end, amplicon:seq,
         f_snps:[], r_snps:[], f_repeat:0, r_repeat:0,
-        f_tm_na:54.2, r_tm_na:54.0, f_tm_ucsc:59.3, r_tm_ucsc:62.0, d_tm:0,
+        f_tm_ucsc:59.3, r_tm_ucsc:62.0, d_tm:0,
         ispcr:{checked:true,on_target:true,off_target:[]}}]}],
     failures:[],
   };

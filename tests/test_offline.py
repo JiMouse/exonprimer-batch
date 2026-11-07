@@ -424,22 +424,22 @@ def test_batch_failure_falls_back_to_single_requests():
     assert all(m.seq for m in models), "a dead batch endpoint must not lose the sequences"
 
 
-def test_both_tm_values_are_reported():
+def test_exactly_two_tm_are_published():
+    """Two Tm, each with an exact referent: the design value under tube
+    conditions, and the one UCSC prints. The Na+-only value was a third
+    column until it turned out to match no tool at all - it is still
+    computed (tm_na) but must not reach the output."""
     _, g = run("PLUSGENE")
     for a in g["amplicons"]:
         for b in a["pairs"]:
-            assert b["f_tm_na"] < b["f_tm"] and b["r_tm_na"] < b["r_tm"], \
-                "Na+-only Tm must read lower than the PCR-condition Tm"
-            assert 4 < b["f_tm"] - b["f_tm_na"] < 8, \
-                f"the Mg2+ contribution should be about 6 C, got {b['f_tm'] - b['f_tm_na']:.1f}"
+            assert {"f_tm", "r_tm", "f_tm_ucsc", "r_tm_ucsc"} <= set(b)
+            assert not [k for k in b if "tm_na" in k], \
+                f"the Na+-only Tm is not published any more: {sorted(b)}"
             assert b["d_tm"] == round(abs(b["f_tm"] - b["r_tm"]), 1)
-            # The UCSC column is a third formula, not a third salt: Breslauer
-            # 1986 / Schildkraut instead of SantaLucia 1998, at the same
-            # Na+-only conditions as f_tm_na. It reads several degrees higher
-            # and the gap is sequence-dependent, which is the whole reason it
-            # is reported separately.
-            assert b["f_tm_ucsc"] > b["f_tm_na"] and b["r_tm_ucsc"] > b["r_tm_na"], \
-                "the Breslauer tables read higher than SantaLucia at the same salt"
+            # Mg2+ is worth about 6 C, so the design Tm must sit well above
+            # the Na+-only value of the very same oligo and tables.
+            assert 4 < b["f_tm"] - epb.tm_na(b["f_seq"]) < 8, \
+                f"the Mg2+ contribution should be about 6 C on {b['f_seq']}"
 
 
 def test_ucsc_tm_matches_what_hgpcr_prints():
@@ -493,15 +493,17 @@ def test_salt_conditions_reach_primer3_and_change_the_tm():
     # Designing under Na+-only conditions picks different primers - Primer3
     # optimises towards 60 C under whatever conditions it is given - so the
     # two runs cannot be compared primer by primer. What must hold is that
-    # when the design conditions ARE Na+-only, the reported Tm and the
-    # Na+ column coincide, and that they diverge under PCR conditions.
+    # when the design conditions ARE Na+-only, the Tm Primer3 reports lands
+    # exactly on tm_na, and that under PCR conditions it reads higher. This
+    # is why tm_na survives the removal of its column: nothing else shows
+    # that the salt settings are really reaching Primer3.
     _, a = run("PLUSGENE", hot)
     _, b = run("PLUSGENE", cold)
     for x in amp(b, "1")["pairs"]:
-        assert x["f_tm"] == x["f_tm_na"] and x["r_tm"] == x["r_tm_na"], \
-            f'Na+-only design should report one Tm, got {x["f_tm"]} vs {x["f_tm_na"]}'
+        assert x["f_tm"] == epb.tm_na(x["f_seq"]) and x["r_tm"] == epb.tm_na(x["r_seq"]), \
+            f'Na+-only design should report the Na+-only Tm, got {x["f_tm"]}'
     for x in amp(a, "1")["pairs"]:
-        assert x["f_tm"] > x["f_tm_na"], "PCR conditions must read higher than Na+ alone"
+        assert x["f_tm"] > epb.tm_na(x["f_seq"]), "PCR conditions must read higher than Na+ alone"
 
 
 def test_noncoding_mane_transcript_is_refused_clearly():
