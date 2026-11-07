@@ -7,7 +7,10 @@ ExonPrimer way, exported to **Excel**, and published as a **GitHub Pages site** 
 gene and an exon — or paste a variant — to get the precomputed primers.
 
 The gene list covers **6,437 genes** (GRCh38, MANE Select) — the original panel merged with the
-**OMIM-morbid set**, every gene with an OMIM disease. Each primer pair is checked against common
+**OMIM-morbid set**, every gene with an OMIM disease. **6,370** of them reach the site; the 67
+that do not are listed in the Problems sheet — 59 have no protein-coding transcript at all
+(ncRNAs and pseudogenes such as *ATXN8OS*, *CYP21A1P*, *DUX4L1*, which have no coding exon to
+target) and 8 are symbols Ensembl cannot resolve. Each primer pair is checked against common
 SNPs, repeats, segmental duplications and genome-wide in-silico PCR.
 Search a gene (`MTHFR`), a variant (`POLG:c.2243G>C`) or a position (`chr15:89327201`), and
 download the whole panel as one Excel workbook.
@@ -77,7 +80,8 @@ Set the parameters to match the ones you use on the ExonPrimer form (`--product`
 
 ## Tm, and why two tools disagree
 
-The Tm columns are Primer3's nearest-neighbour value (SantaLucia 1998). What matters is the
+The Tm the design works from is Primer3's nearest-neighbour value (SantaLucia 1998); two further
+columns restate the same oligo under other tools' conventions, below. What matters first is the
 conditions, which are now stated rather than inherited from a library default:
 
 | | default | flag |
@@ -102,12 +106,41 @@ Primer3 has defaulted to SantaLucia 1998 since 2.0. At identical salt the two di
 into the other: for `POLG_E3` the forward primer reads 54.2 °C (SantaLucia) vs 59.3 °C (UCSC)
 and the reverse 54.4 vs 62.0, which also inflates the apparent ΔTm of the pair from 0.0 to
 2.7 °C. A third column, `F Tm UCSC` / `R Tm UCSC`, reproduces the UCSC number exactly, so
-cross-checking a pair on hgPcr no longer looks like a bug. The design itself is optimised
-against SantaLucia; the UCSC column is for comparison only.
+cross-checking a pair on hgPcr no longer looks like a bug. Data built before the column gains it
+from `scripts/backfill_tm_ucsc.py`, with no redesign: the value depends only on the primer
+sequence.
 
-The nearest-neighbour **ΔTm** between the two primers of a pair is stable across conventions.
-Simple GC rules are not: for the pair above they give a ΔTm of 2.0 °C where both
-nearest-neighbour models give 0.4 °C.
+A pair's **ΔTm** is stable across *salt* conventions but not across *tables*. `PRKCG_E5` is
+0.2 °C apart under PCR conditions and the same 0.2 °C under Na⁺ alone — the salt moves both
+primers together — but **5.6 °C** apart under UCSC's tables (58.3 vs 63.9), which is the
+difference between a matched pair and one you would redesign. Simple GC rules fail in the other
+direction: both primers of that pair are 60 % GC, so any GC-only formula calls them identical
+whatever their sequences actually do. Matching is done on the SantaLucia value, and that is the
+only one of the three that is comparable from pair to pair.
+
+### Which temperature to use
+
+Three numbers for one oligo invites the question of which is right. **SantaLucia 1998 is the
+one to trust** — it is the modern, better-validated parameter set, which is why Primer3 made it
+the default, and it is the value the design is actually optimised against: `PRIMER_OPT_TM`, the
+57–63 °C window and `PRIMER_PAIR_MAX_DIFF_TM` all act on it. The Na⁺ column exists to meet web
+calculators on their own terms, and the UCSC column to meet hgPcr on its; neither is used to
+pick a primer, and the UCSC number in particular is a legacy display — isPcr's actual matching
+does not use it.
+
+For the bench, the column to read is **`Tm PCR`** (`F Tm PCR (°C)` in the workbook, the plain
+`Tm °C` column on the site), because its conditions are the ones in the tube: 1.5 mM Mg²⁺ and 0.6 mM dNTP are what a standard reaction contains, and ignoring them
+understates the duplex by about 6 °C. Reading `Tm Na⁺` as if it were the real Tm is how a panel
+ends up annealed 5–6 °C too cold, with the non-specific products that follow. That makes the
+usual rule of thumb — anneal a few degrees below the lower primer's Tm, or touch down to it —
+safe to apply to `Tm PCR` directly and to nothing else here.
+
+The practical payoff of designing to one target is a single programme for the whole panel.
+On the current build **97.9 %** of best pairs have both primers inside the 57–63 °C window
+(median 59.8 °C) and 99.8 % are matched to within 2 °C, so one annealing temperature — 58–60 °C,
+or a 65 → 58 °C touchdown — runs essentially every amplicon. The exceptions are the 5.3 % of
+amplicons designed with relaxed settings, which are flagged **Check** precisely so they are not
+loaded onto a plate on the assumption that they behave like the rest.
 
 ### Matching the two primers of a pair
 
@@ -257,15 +290,16 @@ The reported Tm is Primer3's nearest-neighbour value (SantaLucia 1998) under **P
 50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP, 50 nM primer. A calculator that models Na⁺ alone reads
 about **6 °C lower for the same oligo**, and UCSC in-silico PCR, which keeps the older Breslauer
 tables, reads 5–8 °C *higher* than that — so check which convention a tool uses before concluding
-that two tools disagree. Both of those are reported alongside (`Tm Na⁺`, `Tm UCSC`). The
-nearest-neighbour ΔTm between the two primers of a pair is stable across conventions; simple GC
-rules are not.
+that two tools disagree. Both of those are reported alongside (`Tm Na⁺`, `Tm UCSC`), and the one
+to work from is `Tm PCR`. A pair's ΔTm survives a change of salt but not a change of tables, so
+it too is only comparable within the SantaLucia column.
 
 Every amplicon view shows **ΔTm** for the pair, and the checkbox above the search box re-orders
 the alternatives already published so that a pair matched to within 2 °C comes first. It changes
 nothing in the data — Primer3's own rank 1 stays listed, and a pair is never promoted if it would
-trade away genome-wide specificity. On the current build, 10 % of best pairs exceed 2 °C and
-two thirds of those already have a matched alternative.
+trade away genome-wide specificity. It matters much less than it used to: on the current build
+only **187 of 86,437** best pairs (0.2 %) exceed 2 °C, against 10 % before `--wt-tm-diff`, and
+141 of those 187 have a matched alternative behind the checkbox.
 
 ## Publish the website on GitHub
 
@@ -278,8 +312,10 @@ two thirds of those already have a matched alternative.
    directly, and `…/#v=POLG:c.2243G%3EC` opens a variant. The full Excel is downloadable from
    the site and from each workflow run's artifacts.
 
-The workflow runs the offline tests, designs primers, and deploys `site/` — nothing generated is
-committed to the repository.
+The workflow runs the offline tests, designs primers, deploys `site/` and commits the built data
+back to `main` as `Built data: N files changed`, so `git log -p site/data/genes/POLG.json` is the
+history of that gene's primers. The workbook is not committed — it is a build artifact and a
+download on the site.
 
 ### Large gene lists
 
@@ -304,7 +340,7 @@ fingerprint of the inputs that determine it — `genes.txt`, `exonprimer_batch.p
 deliberately **not** part of that fingerprint.
 
 So editing `site/index.html` leaves the fingerprint unchanged: `plan` finds the published asset,
-the 30 `design` jobs are skipped, `merge` restores the data and the site redeploys in a couple of
+the 43 `design` jobs are skipped, `merge` restores the data and the site redeploys in a couple of
 minutes. Editing `genes.txt` changes the fingerprint and the data is rebuilt as usual. Tick
 **force_rebuild** in the Actions tab to rebuild regardless.
 
@@ -347,12 +383,13 @@ Ensembl/UCSC/isPcr responses. The fakes serve the UCSC `mane` track and the batc
 the MANE track is **identical** to one built from Ensembl (exons, transcript, CDS bounds, region),
 that a gene missing from the track falls back to Ensembl rather than being skipped, that one POST
 covers many genes and the sequences match the single-region ones, and that a dead batch endpoint
-falls back instead of losing data. It also pins both Tm values, the ΔTm ceiling, and that the salt
-conditions actually reach Primer3. Beyond that it checks primer coordinates against the genome,
-minimum distance,
-coverage of every coding base, SNP avoidance and the 3′-end rule, the MAF cut-off, repeat
-avoidance and the 5′-only fallback, segmental-duplication alerts, and that an off-target
-in-silico PCR product demotes a pair.
+falls back instead of losing data. It also pins all three Tm values, the ΔTm ceiling, and that the
+salt conditions actually reach Primer3 — including a check of `tm_ucsc` against the figures UCSC
+in-silico PCR itself prints for a known pair, so a primer3-py upgrade that moves either
+parameter set fails loudly instead of silently shifting a published column. Beyond that it checks
+primer coordinates against the genome, minimum distance, coverage of every coding base, SNP
+avoidance and the 3′-end rule, the MAF cut-off, repeat avoidance and the 5′-only fallback,
+segmental-duplication alerts, and that an off-target in-silico PCR product demotes a pair.
 
 ## Triaging the Check rows
 
