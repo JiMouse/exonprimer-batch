@@ -76494,7 +76494,7 @@
   },
   {
    "gene": "ATXN8OS",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "CHASERR",
@@ -76502,7 +76502,7 @@
   },
   {
    "gene": "CYP21A1P",
-   "error": "RuntimeError: request failed repeatedly: https://rest.ensembl.org/lookup/symbol/homo_sapiens/CYP21A1P"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "DHRS4L1",
@@ -76526,11 +76526,11 @@
   },
   {
    "gene": "GNAS-AS1",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "H19",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "HYMAI",
@@ -76542,7 +76542,7 @@
   },
   {
    "gene": "KCNQ1OT1",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "KRT10-AS1",
@@ -76678,35 +76678,35 @@
   },
   {
    "gene": "RMRP",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU12",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU2-2",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU4-2",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU4ATAC",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU5B-1",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU6ATAC",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RNU7-1",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "RPSAP52",
@@ -76734,11 +76734,11 @@
   },
   {
    "gene": "SNORD118",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "TERC",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "TRU-TCA1-1",
@@ -76746,7 +76746,7 @@
   },
   {
    "gene": "XIST",
-   "error": "KeyError: 'Translation'"
+   "error": "LookupError: no protein-coding transcript"
   },
   {
    "gene": "XKRY",
