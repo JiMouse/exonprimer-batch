@@ -753,7 +753,7 @@ function renderAmp(gene, a){
   const span = a.exons.length>1 ? `Exons ${a.exons[0]}–${a.exons[a.exons.length-1]} combined` : `Exon ${a.exons[0]}`;
   const frag = a.fragment ? ` · fragment ${a.fragment}` : '';
   const alts = ps.slice(1).map(p=>`<tr><td>${p.rank}</td><td class="seq">${p.f_seq}${snpLine(p.f_snps,p.f_repeat)}</td><td class="seq">${p.r_seq}${snpLine(p.r_snps,p.r_repeat)}</td><td>${p.f_tm}/${p.r_tm}</td><td class="${dTm(p)>DTM_LIMIT?'hot':''}">${dTmText(p)}</td><td>${p.product}</td><td>${esc(ispcrText(p.ispcr))}</td></tr>`).join('');
-  const hasNa = b.f_tm_na != null;
+  const hasNa = b.f_tm_na != null, hasUcsc = b.f_tm_ucsc != null;
   const swapped = reordered(a)
     ? `<li>Showing Primer3 rank ${b.rank} instead of rank 1: its primers are matched to within ${DTM_LIMIT} °C
         (ΔTm ${dTmText(b)} vs ${dTmText(a.pairs[0])}). Rank 1 is still listed under the alternatives, and it
@@ -764,10 +764,10 @@ function renderAmp(gene, a){
     <div class="sub">${span}${frag} · target ${fmt(a.target_len)} bp (${esc(META.params.target==='coding'?'coding part':'whole exon')}) · tier <i>${esc(a.tier)}</i>${a.relaxed?' (relaxed)':''}</div>
     ${a.warnings.length||swapped?`<ul class="warns">${swapped}${a.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`:''}
     <div class="table-scroll"><table>
-      <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th title="Nearest-neighbour Tm under PCR conditions, with Mg²⁺">Tm °C</th>${hasNa?'<th title="The same tables with Mg²⁺ and dNTP at zero — what a Na⁺-only calculator reports">Tm Na⁺</th>':''}<th>GC %</th><th></th></tr>
-      <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td>${hasNa?`<td class="muted">${b.f_tm_na}</td>`:''}<td>${b.f_gc}</td>
+      <tr><th></th><th>Name</th><th>Sequence 5′→3′</th><th>Len</th><th title="Nearest-neighbour Tm under PCR conditions, with Mg²⁺">Tm °C</th>${hasNa?'<th title="The same tables with Mg²⁺ and dNTP at zero — what a Na⁺-only calculator reports">Tm Na⁺</th>':''}${hasUcsc?'<th title="What UCSC in-silico PCR prints: same salt as Tm Na⁺, but the older Breslauer/Rychlik 1990 tables (Primer3 PRIMER_TM_FORMULA=0) instead of SantaLucia 1998">Tm UCSC</th>':''}<th>GC %</th><th></th></tr>
+      <tr><td><span class="tag f">F</span></td><td>${esc(name)}F</td><td class="seq">${b.f_seq}${snpLine(b.f_snps, b.f_repeat)}</td><td>${b.f_len}</td><td>${b.f_tm}</td>${hasNa?`<td class="muted">${b.f_tm_na}</td>`:''}${hasUcsc?`<td class="muted">${b.f_tm_ucsc}</td>`:''}<td>${b.f_gc}</td>
           <td><button class="btn copy" data-copy="${b.f_seq}" data-what="Forward primer">Copy</button></td></tr>
-      <tr><td><span class="tag r">R</span></td><td>${esc(name)}R</td><td class="seq">${b.r_seq}${snpLine(b.r_snps, b.r_repeat)}</td><td>${b.r_len}</td><td>${b.r_tm}</td>${hasNa?`<td class="muted">${b.r_tm_na}</td>`:''}<td>${b.r_gc}</td>
+      <tr><td><span class="tag r">R</span></td><td>${esc(name)}R</td><td class="seq">${b.r_seq}${snpLine(b.r_snps, b.r_repeat)}</td><td>${b.r_len}</td><td>${b.r_tm}</td>${hasNa?`<td class="muted">${b.r_tm_na}</td>`:''}${hasUcsc?`<td class="muted">${b.r_tm_ucsc}</td>`:''}<td>${b.r_gc}</td>
           <td><button class="btn copy" data-copy="${b.r_seq}" data-what="Reverse primer">Copy</button></td></tr>
     </table></div>
     <div class="facts">

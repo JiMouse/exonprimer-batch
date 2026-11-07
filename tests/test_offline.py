@@ -433,6 +433,24 @@ def test_both_tm_values_are_reported():
             assert 4 < b["f_tm"] - b["f_tm_na"] < 8, \
                 f"the Mg2+ contribution should be about 6 C, got {b['f_tm'] - b['f_tm_na']:.1f}"
             assert b["d_tm"] == round(abs(b["f_tm"] - b["r_tm"]), 1)
+            # The UCSC column is a third formula, not a third salt: Breslauer
+            # 1986 / Schildkraut instead of SantaLucia 1998, at the same
+            # Na+-only conditions as f_tm_na. It reads several degrees higher
+            # and the gap is sequence-dependent, which is the whole reason it
+            # is reported separately.
+            assert b["f_tm_ucsc"] > b["f_tm_na"] and b["r_tm_ucsc"] > b["r_tm_na"], \
+                "the Breslauer tables read higher than SantaLucia at the same salt"
+
+
+def test_ucsc_tm_matches_what_hgpcr_prints():
+    """Checked against the UCSC in-silico PCR output for this POLG exon 3
+    pair: hgPcr reported 59.3 C and 62.0 C, and says so with the Rychlik,
+    Spencer and Rhoads 1990 formula (Primer3 PRIMER_TM_FORMULA=0)."""
+    assert epb.tm_ucsc("CCACACCTGACCTGTAGCTG") == 59.3
+    assert epb.tm_ucsc("GCAAAGGCAACAGAGACACG") == 62.0
+    # The same oligos under the project's own (SantaLucia) tables.
+    assert epb.tm_na("CCACACCTGACCTGTAGCTG") == 54.2
+    assert epb.tm_na("GCAAAGGCAACAGAGACACG") == 54.4
 
 
 def test_pairs_are_matched_within_the_tm_ceiling():

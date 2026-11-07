@@ -78,6 +78,25 @@ def tm_na(seq: str) -> float:
                                  dntp_conc=0.0, dna_conc=50.0), 1)
 
 
+def tm_ucsc(seq: str) -> float:
+    """The Tm UCSC in-silico PCR prints, reproduced exactly.
+
+    Same salt as tm_na, but the old Breslauer 1986 nearest-neighbour tables
+    with the Schildkraut-Lifson salt term - the "formula by Rychlik, Spencer
+    and Rhoads 1990" the hgPcr page cites, i.e. Primer3's
+    PRIMER_TM_FORMULA=0 / PRIMER_SALT_CORRECTIONS=0. Everywhere else we use
+    SantaLucia 1998 (primer3-py's default, and Primer3's since 2.0), which is
+    the better-validated set and the one the design is optimised against.
+    The two disagree by about 5-8 C on a 20-mer, and the gap is
+    sequence-dependent, so no constant offset converts one into the other -
+    hence this column, so a UCSC cross-check does not look like a bug.
+    """
+    return round(primer3.calc_tm(seq.upper(), mv_conc=50.0, dv_conc=0.0,
+                                 dntp_conc=0.0, dna_conc=50.0,
+                                 tm_method="breslauer",
+                                 salt_corrections_method="schildkraut"), 1)
+
+
 def ucsc_chrom(chrom: str) -> str:
     return "chrM" if chrom in ("MT", "M") else f"chr{chrom}"
 
@@ -707,6 +726,8 @@ def pair_record(m: GeneModel, t: Target, res: dict, i: int, w0: int) -> dict:
         # Reported alongside so two tools can be compared without guessing
         # which conditions each assumed.
         "f_tm_na": tm_na(m.seq[f_lo:f_hi + 1]), "r_tm_na": tm_na(rc(m.seq[r_lo:r_hi + 1])),
+        # What UCSC in-silico PCR prints for the same two oligos (see tm_ucsc).
+        "f_tm_ucsc": tm_ucsc(m.seq[f_lo:f_hi + 1]), "r_tm_ucsc": tm_ucsc(rc(m.seq[r_lo:r_hi + 1])),
         "d_tm": round(abs(round(res[f"PRIMER_LEFT_{i}_TM"], 1) - round(res[f"PRIMER_RIGHT_{i}_TM"], 1)), 1),
         "f_gc": round(res[f"PRIMER_LEFT_{i}_GC_PERCENT"], 1), "r_gc": round(res[f"PRIMER_RIGHT_{i}_GC_PERCENT"], 1),
         "f_len": llen, "r_len": rlen,
@@ -918,14 +939,14 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
     ws = wb.active
     ws.title = "Primers"
     cols = ["Gene", "Exon", "Status", "Fragment", "Transcript", "RefSeq (MANE)",
-            "Forward name", "Forward primer (5'→3')", "F len", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F GC %",
-            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R GC %",
+            "Forward name", "Forward primer (5'→3')", "F len", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F Tm UCSC (°C)", "F GC %",
+            "Reverse name", "Reverse primer (5'→3')", "R len", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R Tm UCSC (°C)", "R GC %",
             "ΔTm F-R (°C)",
             "Product (bp)", "F 3' to exon (bp)", "Exon to R 3' (bp)",
             "Chr", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})", "Target (bp)",
             "Design tier", "Common SNPs under F", "Common SNPs under R", "Repeat bases F/R",
             "Segmental duplication", "In-silico PCR", "Warnings", "UCSC check"]
-    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 11, 11, 7, 16, 30, 6, 11, 11, 7, 11,
+    header(ws, cols, [10, 7, 8, 8, 19, 15, 16, 30, 6, 11, 11, 12, 7, 16, 30, 6, 11, 11, 12, 7, 11,
                       9, 9, 9, 5, 13, 13, 8,
                       11, 26, 26, 9, 30, 30, 60, 13])
     for g in results:
@@ -933,8 +954,8 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
             b = a["pairs"][0]
             name = f'{g["gene"]}_E{a["label"]}'
             ws.append([g["gene"], a["label"], a["status"], a["fragment"], g["transcript"], g["refseq"],
-                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_tm_na"], b["f_gc"],
-                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_tm_na"], b["r_gc"],
+                       name + "F", b["f_seq"], b["f_len"], b["f_tm"], b["f_tm_na"], b["f_tm_ucsc"], b["f_gc"],
+                       name + "R", b["r_seq"], b["r_len"], b["r_tm"], b["r_tm_na"], b["r_tm_ucsc"], b["r_gc"],
                        b["d_tm"],
                        b["product"], b["f_dist"], b["r_dist"], b["chrom"], b["start"], b["end"], a["target_len"],
                        a["tier"] + (" (relaxed)" if a["relaxed"] else ""),
@@ -946,23 +967,23 @@ def write_excel(results: list[dict], errors: list[dict], p: Params, path: str, a
         for f in g["failures"]:
             ws.append([g["gene"], f["label"], "FAIL", f["fragment"], g["transcript"], g["refseq"]]
                       + [""] * (len(cols) - 8) + ["No primer pair found. " + f.get("reason", ""), ""])
-    style_rows(ws, mono_cols=(8, 14), link_cols=(len(cols),), status_col=3)
+    style_rows(ws, mono_cols=(8, 15), link_cols=(len(cols),), status_col=3)
     ws.auto_filter.ref = ws.dimensions
 
     ws2 = wb.create_sheet("Alternatives")
-    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm PCR (°C)", "F Tm Na+ (°C)",
-                 "Reverse primer (5'→3')", "R Tm PCR (°C)", "R Tm Na+ (°C)", "ΔTm F-R (°C)",
+    header(ws2, ["Gene", "Exon", "Rank", "Forward primer (5'→3')", "F Tm PCR (°C)", "F Tm Na+ (°C)", "F Tm UCSC (°C)",
+                 "Reverse primer (5'→3')", "R Tm PCR (°C)", "R Tm Na+ (°C)", "R Tm UCSC (°C)", "ΔTm F-R (°C)",
                  "Product (bp)", "Penalty", "SNPs F", "SNPs R", "Repeat bases F/R",
                  "In-silico PCR", f"Amplicon start ({assembly})", f"Amplicon end ({assembly})"],
-           [10, 7, 6, 30, 11, 11, 30, 11, 11, 11, 9, 8, 24, 24, 9, 28, 13, 13])
+           [10, 7, 6, 30, 11, 11, 12, 30, 11, 11, 12, 11, 9, 8, 24, 24, 9, 28, 13, 13])
     for g in results:
         for a in g["amplicons"]:
             for b in a["pairs"]:
-                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["f_tm_na"],
-                            b["r_seq"], b["r_tm"], b["r_tm_na"], b["d_tm"],
+                ws2.append([g["gene"], a["label"], b["rank"], b["f_seq"], b["f_tm"], b["f_tm_na"], b["f_tm_ucsc"],
+                            b["r_seq"], b["r_tm"], b["r_tm_na"], b["r_tm_ucsc"], b["d_tm"],
                             b["product"], b["penalty"], snp_text(b["f_snps"]), snp_text(b["r_snps"]),
                             f'{b["f_repeat"]}/{b["r_repeat"]}', ispcr_text(b["ispcr"]), b["start"], b["end"]])
-    style_rows(ws2, mono_cols=(4, 7))
+    style_rows(ws2, mono_cols=(4, 8))
     ws2.auto_filter.ref = ws2.dimensions
 
     ws3 = wb.create_sheet("Amplicons")

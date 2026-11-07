@@ -94,6 +94,17 @@ the very same tables. Most simple web calculators model Na⁺ alone, so they wil
 lower — that is a difference of convention, not a disagreement about the primer. Both values are
 now reported side by side (`F Tm PCR` / `F Tm Na+`) so no one has to guess.
 
+Matching the salt is not always enough, because the *tables* can differ too. UCSC in-silico PCR
+prints a Tm from the older Breslauer 1986 parameters with the Schildkraut–Lifson salt term —
+"the formula by Rychlik, Spencer and Rhoads 1990", i.e. Primer3's `PRIMER_TM_FORMULA=0` — while
+Primer3 has defaulted to SantaLucia 1998 since 2.0. At identical salt the two disagree by
+**5–8 °C on a 20-mer**, and the gap is sequence-dependent, so no constant offset converts one
+into the other: for `POLG_E3` the forward primer reads 54.2 °C (SantaLucia) vs 59.3 °C (UCSC)
+and the reverse 54.4 vs 62.0, which also inflates the apparent ΔTm of the pair from 0.0 to
+2.7 °C. A third column, `F Tm UCSC` / `R Tm UCSC`, reproduces the UCSC number exactly, so
+cross-checking a pair on hgPcr no longer looks like a bug. The design itself is optimised
+against SantaLucia; the UCSC column is for comparison only.
+
 The nearest-neighbour **ΔTm** between the two primers of a pair is stable across conventions.
 Simple GC rules are not: for the pair above they give a ΔTm of 2.0 °C where both
 nearest-neighbour models give 0.4 °C.
@@ -122,7 +133,7 @@ the primers and still removes most of the wide pairs, if that trade suits you be
 
 | Sheet | Content |
 |---|---|
-| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, **both Tm values** (PCR conditions and Na⁺ only), **ΔTm F–R**, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
+| Primers | One row per amplicon: status (OK / CHECK / FAIL), names (`GENE_E3F/R`), sequences, length, **all three Tm values** (PCR conditions, Na⁺ only, and UCSC's formula), **ΔTm F–R**, GC, product size, distances to the exon, coordinates, design tier, SNPs under F and R, repeat bases, segmental duplication, in-silico PCR result, warnings, UCSC link |
 | Alternatives | The best pair plus 2 alternatives per amplicon, each with SNPs and in-silico PCR result |
 | Amplicons | Amplicon sequences, exons UPPER / introns lower |
 | Genes | Transcript, RefSeq, coding exons, amplicons per gene |
@@ -244,9 +255,11 @@ was unreadable HGVS.
 
 The reported Tm is Primer3's nearest-neighbour value (SantaLucia 1998) under **PCR conditions**:
 50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP, 50 nM primer. A calculator that models Na⁺ alone reads
-about **6 °C lower for the same oligo** — so check which convention a tool uses before concluding
-that two tools disagree. The nearest-neighbour ΔTm between the two primers of a pair is stable
-across conventions; simple GC rules are not.
+about **6 °C lower for the same oligo**, and UCSC in-silico PCR, which keeps the older Breslauer
+tables, reads 5–8 °C *higher* than that — so check which convention a tool uses before concluding
+that two tools disagree. Both of those are reported alongside (`Tm Na⁺`, `Tm UCSC`). The
+nearest-neighbour ΔTm between the two primers of a pair is stable across conventions; simple GC
+rules are not.
 
 Every amplicon view shows **ΔTm** for the pair, and the checkbox above the search box re-orders
 the alternatives already published so that a pair matched to within 2 °C comes first. It changes
