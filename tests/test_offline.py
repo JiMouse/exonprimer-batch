@@ -453,6 +453,26 @@ def test_ucsc_tm_matches_what_hgpcr_prints():
     assert epb.tm_na("GCAAAGGCAACAGAGACACG") == 54.4
 
 
+def test_ucsc_tm_zeroes_the_divalents_not_just_the_tables():
+    """The trap in reproducing hgPcr: switching calc_tm to the Breslauer
+    tables while leaving primer3-py's default 1.5 mM Mg2+ / 0.6 mM dNTP in
+    place does not give UCSC's number, it gives UCSC's number plus a flat
+    8.5566 C - 16.6*log10((50 + 120*sqrt(1.5 - 0.6)) / 50). The offset is
+    exact and sequence-independent (the divalent conversion carries no
+    sequence, Schildkraut's term is additive), so it would shift the whole
+    published column without any single value looking obviously wrong.
+    This pins the zeros against a tidy-up that drops them."""
+    import math
+    import primer3
+    offset = 16.6 * math.log10((50 + 120 * math.sqrt(1.5 - 0.6)) / 50)
+    for seq in ("CCACACCTGACCTGTAGCTG", "GCAAAGGCAACAGAGACACG",
+                "ACTGTGGCTCCCTCCTCTAC", "CATCTTTGGGGTAGGGCTGGAAC"):
+        trap = primer3.calc_tm(seq, tm_method="breslauer",
+                               salt_corrections_method="schildkraut")
+        assert abs(trap - (epb.tm_ucsc(seq) + offset)) < 0.05, \
+            f"{seq}: expected the default-salt call to sit {offset:.2f} C above tm_ucsc"
+
+
 def test_pairs_are_matched_within_the_tm_ceiling():
     p = epb.Params()
     assert p.max_tm_diff == 2.0 and p.wt_tm_diff > 0

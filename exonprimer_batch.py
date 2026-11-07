@@ -81,15 +81,24 @@ def tm_na(seq: str) -> float:
 def tm_ucsc(seq: str) -> float:
     """The Tm UCSC in-silico PCR prints, reproduced exactly.
 
-    Same salt as tm_na, but the old Breslauer 1986 nearest-neighbour tables
+    hgPcr calls oligoTm(primer, 50.0, 50.0): the old Breslauer 1986 tables
     with the Schildkraut-Lifson salt term - the "formula by Rychlik, Spencer
-    and Rhoads 1990" the hgPcr page cites, i.e. Primer3's
-    PRIMER_TM_FORMULA=0 / PRIMER_SALT_CORRECTIONS=0. Everywhere else we use
-    SantaLucia 1998 (primer3-py's default, and Primer3's since 2.0), which is
-    the better-validated set and the one the design is optimised against.
-    The two disagree by about 5-8 C on a 20-mer, and the gap is
-    sequence-dependent, so no constant offset converts one into the other -
+    and Rhoads 1990" the page cites, i.e. Primer3's PRIMER_TM_FORMULA=0 /
+    PRIMER_SALT_CORRECTIONS=0 - at 50 mM Na+, 50 nM oligo and NO magnesium.
+    Everywhere else we use SantaLucia 1998 (primer3-py's default, and
+    Primer3's since 2.0), which is the better-validated set and the one the
+    design is optimised against. The two disagree by about 5-8 C on a 20-mer,
+    sequence-dependently, so no constant offset converts one into the other -
     hence this column, so a UCSC cross-check does not look like a bug.
+
+    Every concentration is passed explicitly, and the two zeros are the load-
+    bearing part: changing only the method and leaving primer3-py's defaults
+    (1.5 mM Mg2+, 0.6 mM dNTP) does NOT give UCSC's number, it gives UCSC's
+    number plus 8.5566 C on every primer, exactly and sequence-independently
+    -  16.6*log10((50 + 120*sqrt(1.5 - 0.6)) / 50)  - because the divalent
+    conversion carries no sequence and Schildkraut's term is purely additive.
+    Measured over 22,654 distinct primers of the current build, min = max =
+    +8.557. test_ucsc_tm_matches_what_hgpcr_prints pins the real values.
     """
     return round(primer3.calc_tm(seq.upper(), mv_conc=50.0, dv_conc=0.0,
                                  dntp_conc=0.0, dna_conc=50.0,

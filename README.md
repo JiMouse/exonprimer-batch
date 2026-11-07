@@ -115,25 +115,52 @@ A pair's **ΔTm** is stable across *salt* conventions but not across *tables*. `
 primers together — but **5.6 °C** apart under UCSC's tables (58.3 vs 63.9), which is the
 difference between a matched pair and one you would redesign. Simple GC rules fail in the other
 direction: both primers of that pair are 60 % GC, so any GC-only formula calls them identical
-whatever their sequences actually do. Matching is done on the SantaLucia value, and that is the
+whatever their sequences actually do. Matching is done on the `Tm PCR` value, and that is the
 only one of the three that is comparable from pair to pair.
 
 ### Which temperature to use
 
-Three numbers for one oligo invites the question of which is right. **SantaLucia 1998 is the
-one to trust** — it is the modern, better-validated parameter set, which is why Primer3 made it
-the default, and it is the value the design is actually optimised against: `PRIMER_OPT_TM`, the
-57–63 °C window and `PRIMER_PAIR_MAX_DIFF_TM` all act on it. The Na⁺ column exists to meet web
-calculators on their own terms, and the UCSC column to meet hgPcr on its; neither is used to
-pick a primer, and the UCSC number in particular is a legacy display — isPcr's actual matching
-does not use it.
+Three numbers for one oligo invites the question of which is right. Naming a parameter set does
+not answer it, because the columns differ on **two independent axes** — which tables, and which
+salt — and two of the three are SantaLucia:
 
-For the bench, the column to read is **`Tm PCR`** (`F Tm PCR (°C)` in the workbook, the plain
-`Tm °C` column on the site), because its conditions are the ones in the tube: 1.5 mM Mg²⁺ and 0.6 mM dNTP are what a standard reaction contains, and ignoring them
-understates the duplex by about 6 °C. Reading `Tm Na⁺` as if it were the real Tm is how a panel
-ends up annealed 5–6 °C too cold, with the non-specific products that follow. That makes the
-usual rule of thumb — anneal a few degrees below the lower primer's Tm, or touch down to it —
-safe to apply to `Tm PCR` directly and to nothing else here.
+| | SantaLucia 1998 | Breslauer 1986 + Schildkraut |
+|---|---|---|
+| **PCR salt** (50 mM Na⁺, 1.5 mM Mg²⁺, 0.6 mM dNTP) | **`Tm PCR`** — the design value, and the one for the bench | *(nothing — see the trap below)* |
+| **Na⁺ only** (50 mM Na⁺) | `Tm Na⁺` — what web calculators report | `Tm UCSC` — what hgPcr prints |
+
+The column to work from is **`Tm PCR`** (`F Tm PCR (°C)` in the workbook, the plain `Tm °C`
+column on the site). It wins on both axes at once: SantaLucia is the modern, better-validated
+set — which is why Primer3 made it the default — and the PCR salt row is the one whose
+conditions are in the tube, since 1.5 mM Mg²⁺ and 0.6 mM dNTP are what a standard reaction
+contains. It is also, exactly, the number the design was selected on: `PRIMER_OPT_TM`, the
+57–63 °C window and `PRIMER_PAIR_MAX_DIFF_TM` all act on this cell and no other.
+
+The other two are translations, not second opinions. `Tm Na⁺` is the *same tables* as the design
+value with the magnesium taken out, so it is not what any primer was chosen on; it is there to
+meet a Na⁺-only calculator on its own terms. `Tm UCSC` is a legacy display — isPcr matches by
+sequence, not Tm, and the command-line tool does not print one at all (we run it with `-out=bed`,
+which has no Tm field). Reading either as if it were the real Tm is how a panel ends up annealed
+5–6 °C too cold, with the non-specific products that follow. The usual rule of thumb — anneal a
+few degrees below the lower primer's Tm, or touch down to it — applies to `Tm PCR` and to
+nothing else here.
+
+**The empty cell is a trap, not an oversight.** Switching `calc_tm` to the Breslauer tables
+*without* also zeroing `dv_conc` and `dntp_conc` lands there, and the result is not UCSC's
+number: it is UCSC's number plus **8.56 °C**, on every primer. The offset is exact and
+sequence-independent, because Primer3 converts divalents with `120·√(dv − dntp)` — no sequence
+in it — and Schildkraut then adds a flat `16.6·log10([Na⁺])`:
+
+```
+16.6 · log10((50 + 120·√(1.5 − 0.6)) / 50) = 8.5566 °C
+```
+
+Measured over 22,654 distinct primers from the current build, min = max = +8.557. That is why
+`tm_ucsc()` passes all four of `mv_conc`, `dv_conc`, `dntp_conc` and `dna_conc` explicitly
+rather than relying on any default. The same arithmetic is why the design Tm cannot be converted
+into UCSC's by adding a constant: SantaLucia's correction enters through ΔS scaled by
+`0.368·(N−1)`, so it depends on length and sequence, and across those same 22,654 primers the
+gap ranges from −7.8 to +5.5 °C.
 
 The practical payoff of designing to one target is a single programme for the whole panel.
 On the current build **97.9 %** of best pairs have both primers inside the 57–63 °C window
@@ -292,7 +319,7 @@ about **6 °C lower for the same oligo**, and UCSC in-silico PCR, which keeps th
 tables, reads 5–8 °C *higher* than that — so check which convention a tool uses before concluding
 that two tools disagree. Both of those are reported alongside (`Tm Na⁺`, `Tm UCSC`), and the one
 to work from is `Tm PCR`. A pair's ΔTm survives a change of salt but not a change of tables, so
-it too is only comparable within the SantaLucia column.
+it too is only comparable within the `Tm PCR` column.
 
 Every amplicon view shows **ΔTm** for the pair, and the checkbox above the search box re-orders
 the alternatives already published so that a pair matched to within 2 °C comes first. It changes
