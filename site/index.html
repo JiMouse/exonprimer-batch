@@ -783,6 +783,8 @@ function renderAmp(gene, a){
       <a class="btn" target="_blank" rel="noopener" href="${ucscBrowser(b.chrom,b.start,b.end)}">View in UCSC browser</a>
       <button class="btn" data-copy="${esc(name)}F\t${b.f_seq}\n${esc(name)}R\t${b.r_seq}" data-what="Primer pair">Copy pair</button>
       <button class="btn" data-copy="${b.amplicon}" data-what="Amplicon">Copy amplicon</button>
+      <button class="btn" data-copy="${esc(orderPair(gene,a,b))}" data-what="Order rows"
+        title="Two lines for the synthesis order sheet: name, sequence, length, empty PCR-control cell, ${esc(ORDER_SCALE)}, ${esc(ORDER_PURIF)}, ${esc(ORDER_FORMAT)}">Copy order rows</button>
     </div>
     <details><summary>Amplicon sequence (exon in colour, primers highlighted, SNPs boxed)</summary>${ampView(b)}</details>
     ${alts?`<details><summary>${ps.length-1} alternative pair${ps.length>2?'s':''}</summary>
@@ -817,6 +819,18 @@ function ispcrText(ip){
   if(!ip || !ip.checked) return 'not run';
   if(ip.off_target && ip.off_target.length) return `${ip.off_target.length} off-target`;
   return ip.on_target ? 'specific' : 'no product';
+}
+/* ---------- oligo synthesis order rows -----------------------------------
+   One line per oligo, tab separated, in the column order of the Eurogentec
+   batch order sheet: name, sequence, length, "PCR positive control" (left
+   empty), then the three parameters that never change for these primers.
+   Names are GENE-E<exon>-F / -R, which is the naming the order sheet gets.  */
+const ORDER_SCALE = '40 nmol (10-99 bases)', ORDER_PURIF = 'RP-HPLC', ORDER_FORMAT = 'H2O-100 µM';
+
+function orderName(gene, a, dir){ return `${gene.gene}-E${a.label}-${dir}`; }
+function orderRow(name, seq){ return [name, seq, seq.length, '', ORDER_SCALE, ORDER_PURIF, ORDER_FORMAT].join('\t'); }
+function orderPair(gene, a, b){
+  return orderRow(orderName(gene,a,'F'), b.f_seq) + '\n' + orderRow(orderName(gene,a,'R'), b.r_seq);
 }
 function geneTSV(gene){
   const rows = [['Name','Sequence','Exon','Product_bp','Tm','dTm_pair','Amplicon']];

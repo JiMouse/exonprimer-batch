@@ -15,8 +15,10 @@ transcript-safety rules (a version difference warns, a different accession is of
 conversion and never renumbered), the UCSC route end to end (0-based half-open rows become
 1-based exons, a foreign `c.` lands on the right genomic base, a shared exon is recognised, a
 gene outside the panel is reported as such), ΔTm display and re-ordering including the guard
-that never promotes a pair with an off-target product, and that a gene symbol is never routed as
-a variant.
+that never promotes a pair with an off-target product, that a gene symbol is never routed as
+a variant, and the oligo order rows: seven tab-separated columns in the order of the synthesis
+order sheet, `GENE-E<exon>-F`/`-R` names, the sequence length, an empty PCR-positive-control
+cell and the three fixed parameters.
 
 `python tests/test_offline.py` builds a synthetic genome with genes on both strands and fake
 Ensembl/UCSC/isPcr responses. The fakes serve the UCSC `mane` track and the batched

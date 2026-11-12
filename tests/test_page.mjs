@@ -127,7 +127,8 @@ if(!script){ console.error('no <script> block in site/index.html'); process.exit
 const api = new Function(script[1] + `
   return {init, route, showVariant, geneEntryFor, parseHGVS, submitQuery,
           renderGene, geneTSV, ucscRowToModel, ucscTranscript, resolveViaUcsc,
-          orderedPairs, bestPair, dTm, setPref:v=>{PREF_MATCHED=v},
+          orderedPairs, bestPair, dTm, orderPair, loadGene,
+          setPref:v=>{PREF_MATCHED=v},
           view:()=>document.querySelector('#view').innerHTML};`)();
 
 let pass = 0, fail = 0;
@@ -311,6 +312,22 @@ ok(location.hash === 'PLUSG', 'whitespace and case are handled');
 globalThis.location.hash = '#v=' + encodeURIComponent('PLUSG:c.15T>G');
 await api.route();
 ok(has('PLUSG_E2'), 'route() handles a v= hash');
+
+/* ---- order rows for the synthesis order sheet ---- */
+const og = await api.loadGene('PLUSG');
+const oa = og.amplicons[0];
+const rows = api.orderPair(og, oa, api.bestPair(oa)).split('\n');
+ok(rows.length === 2, `one line per oligo (got ${rows.length})`);
+const cols = rows[0].split('\t');
+ok(cols.length === 7, `seven columns, one per sheet column (got ${cols.length})`);
+ok(cols[0] === 'PLUSG-E2-F', `name is GENE-E<exon>-F (got "${cols[0]}")`);
+ok(rows[1].split('\t')[0] === 'PLUSG-E2-R', 'the reverse oligo is named -R');
+ok(cols[1] === 'ACGTACGTACGTACGTAC', 'column 2 is the sequence');
+ok(cols[2] === String(cols[1].length), 'column 3 is the length of that sequence');
+ok(cols[3] === '', 'the PCR-positive-control column is left empty');
+ok(cols[4] === '40 nmol (10-99 bases)' && cols[5] === 'RP-HPLC' && cols[6] === 'H2O-100 \u00b5M',
+   'the three fixed parameters close every line');
+ok(!/[\r\n]/.test(rows[0]), 'a line carries no stray newline');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
